@@ -5,13 +5,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.questionnaire_fixed"
-    compileSdk = 35
+    namespace = "com.example.fall_risk"
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.fall_risk"  // Keep only one Application ID here
         minSdk = 24                              // Set minSdk to 24 as required
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }

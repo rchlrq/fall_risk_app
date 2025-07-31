@@ -1,15 +1,16 @@
 import 'dart:convert';
 import 'dart:io';
-
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new/return_code.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart'; // Only once!
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:camera/camera.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   runApp(MaterialApp(
@@ -524,140 +525,127 @@ class VideoPage extends StatefulWidget {
 }
 
 class _VideoPageState extends State<VideoPage> {
-  File? _video;
+  CameraController? _controller;
+  late PoseDetector _poseDetector;
+  bool _isDetecting = false;
+  String? _poseInfo;
+  bool _isCameraInitialized = false;
 
-  Future<bool> _requestPermission(ImageSource source) async {
-    if (source == ImageSource.camera) {
-      final status = await Permission.camera.request();
-      return status.isGranted;
-    } else if (source == ImageSource.gallery) {
-      final status = await Permission.storage.request();
-      return status.isGranted;
-    }
-    return false;
+  @override
+  void initState() {
+    super.initState();
+    // Lock orientation to portrait
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    _checkAndInitCamera();
+    _poseDetector = PoseDetector(
+      options: PoseDetectorOptions(mode: PoseDetectionMode.stream),
+    );
   }
 
-  Future<void> _pickVideo(ImageSource source) async {
-    final hasPermission = await _requestPermission(source);
-    if (!hasPermission) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Permission denied for ${source == ImageSource.camera ? 'camera' : 'gallery'}')),
-      );
-      return;
+  @override
+  void dispose() {
+    // Restore orientation
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    _controller?.dispose();
+    _poseDetector.close();
+    super.dispose();
+  }
+
+  Future<void> _checkAndInitCamera() async {
+    final status = await Permission.camera.request();
+    if (status.isGranted) {
+      _initializeCamera();
+    } else {
+      setState(() {
+        _poseInfo = 'Camera permission denied';
+      });
     }
+  }
 
+  Future<void> _initializeCamera() async {
     try {
-      final picker = ImagePicker();
-      final pickedFile = await picker.pickVideo(source: source);
-      if (pickedFile != null) {
-        setState(() {
-          _video = File(pickedFile.path);
-        });
+      final cameras = await availableCameras();
+      final camera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
 
-        // Prepare output path for processed video
-        final dir = _video!.parent;
-        final filename = path.basename(_video!.path);
-        final outputPath = path.join(dir.path, 'processed_$filename');
+      _controller = CameraController(
+        camera,
+        ResolutionPreset.high, // 1080p
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
+      );
 
-        // Run FFmpeg command to resize video
-        final command = '-i "${_video!.path}" -vf scale=640:480 "$outputPath"';
+      await _controller!.initialize();
 
-        final session = await FFmpegKit.execute(command);
-        final returnCode = await session.getReturnCode();
-        if (ReturnCode.isSuccess(returnCode)) {
-          print('Video processed successfully: $outputPath');
+      // Start image stream for pose detection
+      await _controller!.startImageStream(_processCameraImage);
 
-          final prefs = await SharedPreferences.getInstance();
-          final key = '${widget.userName}:data';
-          final data = prefs.getString(key);
-          final saved = data != null ? jsonDecode(data) : {};
-          saved['Processed_Video_path'] = outputPath;
-          await prefs.setString(key, jsonEncode(saved));
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Video processed successfully')),
-          );
-        } else {
-          print('Video processing failed with code $returnCode');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Video processing failed')),
-          );
-        }
-
-        // Save original video path as before
-        final prefs = await SharedPreferences.getInstance();
-        final key = '${widget.userName}:data';
-        final data = prefs.getString(key);
-        final saved = data != null ? jsonDecode(data) : {};
-        saved['Video_path'] = pickedFile.path;
-        await prefs.setString(key, jsonEncode(saved));
-      }
+      setState(() {
+        _isCameraInitialized = true;
+      });
     } catch (e) {
-      print('Error picking or processing video: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error picking or processing video')),
-      );
+      print('Camera init error: $e');
+      setState(() {
+        _poseInfo = 'Failed to initialize camera';
+      });
     }
   }
 
-  Future<void> _processVideoFrames() async {
-    if (_video == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Please select a video first')));
-      return;
-    }
+  Future<void> _processCameraImage(CameraImage image) async {
+    if (_isDetecting || _controller == null) return;
+    _isDetecting = true;
 
     try {
-      final tempDir = await getTemporaryDirectory();
-      final framesDir = Directory(path.join(tempDir.path, 'extracted_frames'));
-
-      if (await framesDir.exists()) {
-        await framesDir.delete(recursive: true);
-      }
-      await framesDir.create();
-
-      final command =
-          '-i "${_video!.path}" -vf fps=1 "${framesDir.path}/frame_%04d.jpg"';
-
-      final session = await FFmpegKit.execute(command);
-      final returnCode = await session.getReturnCode();
-      if (!ReturnCode.isSuccess(returnCode)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to extract frames')));
+      // Only support YUV420 format (Android)
+      if (image.format.group != ImageFormatGroup.yuv420) {
+        setState(() {
+          _poseInfo = 'Camera image format not supported: ${image.format.group}';
+        });
+        _isDetecting = false;
         return;
       }
 
-      final frameFiles = framesDir
-          .listSync()
-          .whereType<File>()
-          .where((f) => f.path.endsWith('.jpg'))
-          .toList();
+      final WriteBuffer allBytes = WriteBuffer();
+      for (final Plane plane in image.planes) {
+        allBytes.putUint8List(plane.bytes);
+      }
+      final bytes = allBytes.done().buffer.asUint8List();
 
-      final poseDetector = PoseDetector(
-        options: PoseDetectorOptions(mode: PoseDetectionMode.single),
+      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
+      final camera = _controller!.description;
+      final imageRotation =
+          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+              InputImageRotation.rotation0deg;
+
+      // Use InputImageFormat.yuv420 for Android
+      final inputImage = InputImage.fromBytes(
+        bytes: bytes,
+        metadata: InputImageMetadata(
+          size: imageSize,
+          rotation: imageRotation,
+          format: InputImageFormat.yuv420,
+          bytesPerRow: image.planes[0].bytesPerRow,
+        ),
       );
 
-      int frameCount = 0;
-      for (final file in frameFiles) {
-        final inputImage = InputImage.fromFile(file);
-        final poses = await poseDetector.processImage(inputImage);
+      final poses = await _poseDetector.processImage(inputImage);
 
-        for (final pose in poses) {
-          for (final landmark in pose.landmarks.values) {
-            print(
-                'Frame $frameCount, landmark ${landmark.type}: (${landmark.x}, ${landmark.y}, ${landmark.z})');
-          }
+      setState(() {
+        if (poses.isNotEmpty) {
+          final pose = poses.first;
+          _poseInfo = 'Detected ${pose.landmarks.length} landmarks';
+        } else {
+          _poseInfo = 'No pose detected';
         }
-        frameCount++;
-      }
-      await poseDetector.close();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Processed $frameCount frames for pose detection')));
+      });
     } catch (e) {
-      print('Error processing video frames: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error processing video frames')));
+      setState(() {
+        _poseInfo = 'Error: $e';
+      });
+    } finally {
+      _isDetecting = false;
     }
   }
 
@@ -665,35 +653,30 @@ class _VideoPageState extends State<VideoPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Video Upload'),
+        title: Text('Live Pose Detection'),
         leading: BackButton(
           onPressed: () {
             Navigator.pushReplacement(
-                context, MaterialPageRoute(builder: (_) => FallRiskPage(userName: widget.userName)));
+              context,
+              MaterialPageRoute(
+                builder: (_) => FallRiskPage(userName: widget.userName),
+              ),
+            );
           },
         ),
       ),
       body: Center(
-        child: Column(
+  child: !_isCameraInitialized
+      ? CircularProgressIndicator()
+      : Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (_video != null) ...[
-              Text('Selected video: ${path.basename(_video!.path)}'),
-              SizedBox(height: 20),
-            ],
-            ElevatedButton(
-              onPressed: () => _pickVideo(ImageSource.camera),
-              child: Text('Record Video'),
-            ),
-            ElevatedButton(
-              onPressed: () => _pickVideo(ImageSource.gallery),
-              child: Text('Select Video from Gallery'),
+            AspectRatio(
+              aspectRatio: 9 / 16, // Force vertical 1080p aspect ratio
+              child: CameraPreview(_controller!),
             ),
             SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _processVideoFrames,
-              child: Text('Process Video Frames (Pose Detection)'),
-            ),
+            Text(_poseInfo ?? 'Point the camera at a person'),
             SizedBox(height: 20),
             ElevatedButton(
               onPressed: widget.onNext,
@@ -701,10 +684,11 @@ class _VideoPageState extends State<VideoPage> {
             ),
           ],
         ),
-      ),
+),
     );
   }
 }
+// ...rest of your code...
 
 class SensorPageWrapper extends StatelessWidget {
   final String userName;
