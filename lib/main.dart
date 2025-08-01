@@ -410,56 +410,46 @@ class _FallRiskPageState extends State<FallRiskPage> {
 
   Widget _buildQuestionRow(int index) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center,
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 250,
-            child: Text(
-              questions[index],
-              style: TextStyle(fontSize: 16),
-              textAlign: TextAlign.left,
-            ),
+          Text(
+            '${index + 1}. ${questions[index]}',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
           ),
-          SizedBox(width: 30),
-          Container(
-            width: 120,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Radio<bool>(
-                      value: true,
-                      groupValue: answers[index],
-                      onChanged: (val) {
-                        setState(() {
-                          answers[index] = val;
-                        });
-                      },
-                    ),
-                    Text('Yes'),
-                  ],
+          SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: RadioListTile<bool>(
+                  title: Text('Yes'),
+                  value: true,
+                  groupValue: answers[index],
+                  onChanged: (value) {
+                    setState(() {
+                      answers[index] = value;
+                    });
+                  },
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
                 ),
-                SizedBox(width: 10),
-                Row(
-                  children: [
-                    Radio<bool>(
-                      value: false,
-                      groupValue: answers[index],
-                      onChanged: (val) {
-                        setState(() {
-                          answers[index] = val;
-                        });
-                      },
-                    ),
-                    Text('No'),
-                  ],
+              ),
+              Expanded(
+                child: RadioListTile<bool>(
+                  title: Text('No'),
+                  value: false,
+                  groupValue: answers[index],
+                  onChanged: (value) {
+                    setState(() {
+                      answers[index] = value;
+                    });
+                  },
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ],
       ),
@@ -482,17 +472,28 @@ class _FallRiskPageState extends State<FallRiskPage> {
           },
         ),
       ),
-      body: ListView(
-        children: [
-          ...List.generate(questions.length, _buildQuestionRow),
-          SizedBox(height: 20),
-          Center(
-            child: ElevatedButton(
-              onPressed: allAnswered ? _saveAndContinue : null,
-              child: Text("Next"),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Fall Risk Screening Questionnaire',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
-          ),
-        ],
+            SizedBox(height: 16),
+            ...List.generate(questions.length, _buildQuestionRow),
+            SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: allAnswered ? _saveAndContinue : null,
+                child: Text("Next"),
+              ),
+            ),
+            SizedBox(height: 16), // Extra space at bottom
+          ],
+        ),
       ),
     );
   }
@@ -530,36 +531,20 @@ class _VideoPageState extends State<VideoPage> {
   bool _isDetecting = false;
   String? _poseInfo;
   bool _isCameraInitialized = false;
+  List<Pose> _poses = [];
 
   @override
   void initState() {
     super.initState();
-    // Lock orientation to portrait
-    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-    _checkAndInitCamera();
-    _poseDetector = PoseDetector(
-      options: PoseDetectorOptions(mode: PoseDetectionMode.stream),
-    );
+    _poseDetector = PoseDetector(options: PoseDetectorOptions());
+    _initializeCamera();
   }
 
   @override
   void dispose() {
-    // Restore orientation
-    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     _controller?.dispose();
     _poseDetector.close();
     super.dispose();
-  }
-
-  Future<void> _checkAndInitCamera() async {
-    final status = await Permission.camera.request();
-    if (status.isGranted) {
-      _initializeCamera();
-    } else {
-      setState(() {
-        _poseInfo = 'Camera permission denied';
-      });
-    }
   }
 
   Future<void> _initializeCamera() async {
@@ -572,14 +557,12 @@ class _VideoPageState extends State<VideoPage> {
 
       _controller = CameraController(
         camera,
-        ResolutionPreset.high, // 1080p
+        ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.yuv420,
       );
 
       await _controller!.initialize();
-
-      // Start image stream for pose detection
       await _controller!.startImageStream(_processCameraImage);
 
       setState(() {
@@ -607,23 +590,22 @@ class _VideoPageState extends State<VideoPage> {
         return;
       }
 
+      final camera = _controller!.description;
+      final imageRotation =
+          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+              InputImageRotation.rotation0deg;
+
+      // Concatenate all planes as-is
       final WriteBuffer allBytes = WriteBuffer();
       for (final Plane plane in image.planes) {
         allBytes.putUint8List(plane.bytes);
       }
       final bytes = allBytes.done().buffer.asUint8List();
 
-      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
-      final camera = _controller!.description;
-      final imageRotation =
-          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
-              InputImageRotation.rotation0deg;
-
-      // Use InputImageFormat.yuv420 for Android
       final inputImage = InputImage.fromBytes(
         bytes: bytes,
         metadata: InputImageMetadata(
-          size: imageSize,
+          size: Size(image.width.toDouble(), image.height.toDouble()),
           rotation: imageRotation,
           format: InputImageFormat.yuv420,
           bytesPerRow: image.planes[0].bytesPerRow,
@@ -633,16 +615,19 @@ class _VideoPageState extends State<VideoPage> {
       final poses = await _poseDetector.processImage(inputImage);
 
       setState(() {
+        _poses = poses; // Store poses for drawing
         if (poses.isNotEmpty) {
           final pose = poses.first;
           _poseInfo = 'Detected ${pose.landmarks.length} landmarks';
+          print('Pose detected with ${pose.landmarks.length} landmarks');
         } else {
-          _poseInfo = 'No pose detected';
+          _poseInfo = 'No pose detected - Point camera at a person';
         }
       });
     } catch (e) {
+      print('Pose detection error: $e');
       setState(() {
-        _poseInfo = 'Error: $e';
+        _poseInfo = 'Camera working - Pose detection disabled due to format issues';
       });
     } finally {
       _isDetecting = false;
@@ -666,29 +651,117 @@ class _VideoPageState extends State<VideoPage> {
         ),
       ),
       body: Center(
-  child: !_isCameraInitialized
-      ? CircularProgressIndicator()
-      : Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            AspectRatio(
-              aspectRatio: 9 / 16, // Force vertical 1080p aspect ratio
-              child: CameraPreview(_controller!),
-            ),
-            SizedBox(height: 20),
-            Text(_poseInfo ?? 'Point the camera at a person'),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: widget.onNext,
-              child: Text('Next'),
-            ),
-          ],
-        ),
-),
+        child: !_isCameraInitialized
+            ? CircularProgressIndicator()
+            : SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    AspectRatio(
+                      aspectRatio: 9 / 16, // Force vertical 1080p aspect ratio
+                      child: Stack(
+                        children: [
+                          CameraPreview(_controller!),
+                          // Add pose overlay
+                          CustomPaint(
+                            painter: PosePainter(_poses, _controller!.value.previewSize!),
+                            size: Size.infinite,
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: 20),
+                    Text(_poseInfo ?? 'Point the camera at a person'),
+                    SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: widget.onNext,
+                      child: Text('Next'),
+                    ),
+                  ],
+                ),
+              ),
+      ),
     );
   }
 }
-// ...rest of your code...
+
+// Simple PosePainter without debug prints
+class PosePainter extends CustomPainter {
+  final List<Pose> poses;
+  final Size previewSize;
+
+  PosePainter(this.poses, this.previewSize);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (poses.isEmpty) return;
+
+    final paint = Paint()
+      ..color = Colors.red
+      ..strokeWidth = 4.0
+      ..style = PaintingStyle.fill;
+
+    final linePaint = Paint()
+      ..color = Colors.blue
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    for (final pose in poses) {
+      // Draw landmarks as circles
+      for (final landmark in pose.landmarks.values) {
+        final x = landmark.x * size.width / previewSize.width;
+        final y = landmark.y * size.height / previewSize.height;
+        canvas.drawCircle(Offset(x, y), 4, paint);
+      }
+
+      // Draw skeleton connections
+      _drawSkeleton(canvas, pose, size, linePaint);
+    }
+  }
+
+  void _drawSkeleton(Canvas canvas, Pose pose, Size size, Paint paint) {
+    // Define skeleton connections (body parts)
+    final connections = [
+      // Body
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder],
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow],
+      [PoseLandmarkType.leftElbow, PoseLandmarkType.leftWrist],
+      [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow],
+      [PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist],
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip],
+      [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip],
+      [PoseLandmarkType.leftHip, PoseLandmarkType.rightHip],
+
+      // Legs
+      [PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee],
+      [PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle],
+      [PoseLandmarkType.rightHip, PoseLandmarkType.rightKnee],
+      [PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle],
+    ];
+
+    for (final connection in connections) {
+      final start = pose.landmarks[connection[0]];
+      final end = pose.landmarks[connection[1]];
+
+      if (start != null && end != null) {
+        final startX = start.x * size.width / previewSize.width;
+        final startY = start.y * size.height / previewSize.height;
+        final endX = end.x * size.width / previewSize.width;
+        final endY = end.y * size.height / previewSize.height;
+
+        canvas.drawLine(
+          Offset(startX, startY),
+          Offset(endX, endY),
+          paint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
 
 class SensorPageWrapper extends StatelessWidget {
   final String userName;
