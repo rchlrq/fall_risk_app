@@ -499,6 +499,8 @@ class _FallRiskPageState extends State<FallRiskPage> {
   }
 }
 
+// ... existing code before VideoPageWrapper ...
+
 class VideoPageWrapper extends StatelessWidget {
   final String userName;
   VideoPageWrapper({required this.userName});
@@ -532,6 +534,11 @@ class _VideoPageState extends State<VideoPage> {
   String? _poseInfo;
   bool _isCameraInitialized = false;
   List<Pose> _poses = [];
+  InputImageRotation _rotation = InputImageRotation.rotation0deg;
+
+  // State variables for recording to CSV
+  bool _isRecording = false;
+  final StringBuffer _csvData = StringBuffer();
 
   @override
   void initState() {
@@ -614,26 +621,125 @@ class _VideoPageState extends State<VideoPage> {
 
       final poses = await _poseDetector.processImage(inputImage);
 
+      // If recording, capture the pose data and add it to the CSV string
+      if (_isRecording && poses.isNotEmpty) {
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        for (final pose in poses) {
+          for (final landmark in pose.landmarks.values) {
+            final row = [
+              timestamp,
+              landmark.type.name,
+              landmark.x,
+              landmark.y,
+              landmark.z,
+              landmark.likelihood,
+            ];
+            _csvData.writeln(row.join(','));
+          }
+        }
+      }
+
       setState(() {
-        _poses = poses; // Store poses for drawing
+        _poses = poses;
+        _rotation = imageRotation;
         if (poses.isNotEmpty) {
           final pose = poses.first;
-          _poseInfo = 'Detected ${pose.landmarks.length} landmarks';
-          print('Pose detected with ${pose.landmarks.length} landmarks');
+          if (!_isRecording) {
+            _poseInfo = 'Detected ${pose.landmarks.length} landmarks';
+          }
         } else {
-          _poseInfo = 'No pose detected - Point camera at a person';
+          if (!_isRecording) {
+            _poseInfo = 'No pose detected - Point camera at a person';
+          }
         }
       });
     } catch (e) {
       print('Pose detection error: $e');
       setState(() {
-        _poseInfo = 'Camera working - Pose detection disabled due to format issues';
+        _poseInfo = 'Pose detection error: $e';
       });
     } finally {
       _isDetecting = false;
     }
   }
 
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      // Stop recording and save the data
+      setState(() {
+        _isRecording = false;
+        _poseInfo = 'Recording stopped. Saving data...';
+      });
+
+      // 1. Request storage permission
+      var status = await Permission.storage.status;
+      if (!status.isGranted) {
+        status = await Permission.storage.request();
+      }
+
+      if (status.isGranted) {
+        // 2. Get the public Downloads directory
+        // Note: This might return null on some platforms or if the directory doesn't exist.
+        Directory? directory = await getDownloadsDirectory();
+        if (directory == null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error: Could not access the Downloads directory.')),
+            );
+            // Re-enable recording button if saving fails
+            setState(() {
+              _isRecording = true; 
+              _poseInfo = 'Recording...';
+            });
+            return;
+        }
+
+        final fileName = '${widget.userName}_poses_${DateTime.now().millisecondsSinceEpoch}.csv';
+        final filePath = path.join(directory.path, fileName);
+        final file = File(filePath);
+
+        // Write the CSV string to the file
+        await file.writeAsString(_csvData.toString());
+
+        print('Pose data saved to: $filePath');
+
+        // Save the file path to SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        final key = '${widget.userName}:data';
+        final data = prefs.getString(key);
+        final saved = data != null ? jsonDecode(data) : {};
+        saved['PoseDataPath'] = filePath; // Save the path
+        await prefs.setString(key, jsonEncode(saved));
+
+        // Clear the buffer and navigate
+        _csvData.clear();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Pose data saved to Downloads folder: $fileName')),
+        );
+        widget.onNext();
+
+      } else {
+        // Handle the case where the user denies permission
+        setState(() {
+          _poseInfo = 'Storage permission denied. Cannot save file.';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Storage permission is required to save files.')),
+        );
+      }
+
+    } else {
+      // Start recording
+      _csvData.clear(); // Clear any previous data
+      // Add the header row for the CSV file
+      _csvData.writeln('timestamp,landmark_type,x,y,z,likelihood');
+      setState(() {
+        _isRecording = true;
+        _poseInfo = 'Recording...';
+      });
+    }
+  }
+
+  // ... existing code ...
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -658,25 +764,37 @@ class _VideoPageState extends State<VideoPage> {
                   mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
+                    // MOVED BUTTON AND TEXT TO THE TOP
+                    SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: _toggleRecording,
+                      child: Text(_isRecording ? 'Stop & Save Pose Data' : 'Start Recording'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _isRecording ? Colors.red : Colors.green,
+                      ),
+                    ),
+                    SizedBox(height: 10),
+                    Text(_poseInfo ?? 'Point the camera at a person'),
+                    SizedBox(height: 10),
+
+                    // CAMERA PREVIEW REMAINS BELOW
                     AspectRatio(
                       aspectRatio: 9 / 16, // Force vertical 1080p aspect ratio
                       child: Stack(
                         children: [
                           CameraPreview(_controller!),
                           // Add pose overlay
-                          CustomPaint(
-                            painter: PosePainter(_poses, _controller!.value.previewSize!),
-                            size: Size.infinite,
-                          ),
+                          if (_controller!.value.previewSize != null)
+                            CustomPaint(
+                              painter: PosePainter(
+                                _poses,
+                                _controller!.value.previewSize!,
+                                _rotation, // Pass the rotation here
+                              ),
+                              size: Size.infinite,
+                            ),
                         ],
                       ),
-                    ),
-                    SizedBox(height: 20),
-                    Text(_poseInfo ?? 'Point the camera at a person'),
-                    SizedBox(height: 20),
-                    ElevatedButton(
-                      onPressed: widget.onNext,
-                      child: Text('Next'),
                     ),
                   ],
                 ),
@@ -686,82 +804,118 @@ class _VideoPageState extends State<VideoPage> {
   }
 }
 
-// Simple PosePainter without debug prints
-class PosePainter extends CustomPainter {
-  final List<Pose> poses;
-  final Size previewSize;
 
-  PosePainter(this.poses, this.previewSize);
+
+double translateX(
+    double x, InputImageRotation rotation, Size size, Size absoluteImageSize) {
+  switch (rotation) {
+    case InputImageRotation.rotation90deg:
+      return x *
+          size.width /
+          (Platform.isIOS ? absoluteImageSize.width : absoluteImageSize.height);
+    case InputImageRotation.rotation270deg:
+      return size.width -
+          x *
+              size.width /
+              (Platform.isIOS
+                  ? absoluteImageSize.width
+                  : absoluteImageSize.height);
+    default:
+      return x * size.width / absoluteImageSize.width;
+  }
+}
+
+double translateY(
+    double y, InputImageRotation rotation, Size size, Size absoluteImageSize) {
+  switch (rotation) {
+    case InputImageRotation.rotation90deg:
+    case InputImageRotation.rotation270deg:
+      return y *
+          size.height /
+          (Platform.isIOS ? absoluteImageSize.height : absoluteImageSize.width);
+    default:
+      return y * size.height / absoluteImageSize.height;
+  }
+}
+
+class PosePainter extends CustomPainter {
+  PosePainter(this.poses, this.absoluteImageSize, this.rotation);
+
+  final List<Pose> poses;
+  final Size absoluteImageSize;
+  final InputImageRotation rotation;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (poses.isEmpty) return;
-
     final paint = Paint()
-      ..color = Colors.red
+      ..style = PaintingStyle.stroke
       ..strokeWidth = 4.0
-      ..style = PaintingStyle.fill;
+      ..color = Colors.green;
 
-    final linePaint = Paint()
-      ..color = Colors.blue
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
+    final leftPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0
+      ..color = Colors.yellow;
+
+    final rightPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0
+      ..color = Colors.blueAccent;
 
     for (final pose in poses) {
-      // Draw landmarks as circles
-      for (final landmark in pose.landmarks.values) {
-        final x = landmark.x * size.width / previewSize.width;
-        final y = landmark.y * size.height / previewSize.height;
-        canvas.drawCircle(Offset(x, y), 4, paint);
-      }
+      pose.landmarks.forEach((_, landmark) {
+        canvas.drawCircle(
+            Offset(
+              translateX(landmark.x, rotation, size, absoluteImageSize),
+              translateY(landmark.y, rotation, size, absoluteImageSize),
+            ),
+            1,
+            paint);
+      });
 
-      // Draw skeleton connections
-      _drawSkeleton(canvas, pose, size, linePaint);
-    }
-  }
-
-  void _drawSkeleton(Canvas canvas, Pose pose, Size size, Paint paint) {
-    // Define skeleton connections (body parts)
-    final connections = [
-      // Body
-      [PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder],
-      [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow],
-      [PoseLandmarkType.leftElbow, PoseLandmarkType.leftWrist],
-      [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow],
-      [PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist],
-      [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip],
-      [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip],
-      [PoseLandmarkType.leftHip, PoseLandmarkType.rightHip],
-
-      // Legs
-      [PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee],
-      [PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle],
-      [PoseLandmarkType.rightHip, PoseLandmarkType.rightKnee],
-      [PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle],
-    ];
-
-    for (final connection in connections) {
-      final start = pose.landmarks[connection[0]];
-      final end = pose.landmarks[connection[1]];
-
-      if (start != null && end != null) {
-        final startX = start.x * size.width / previewSize.width;
-        final startY = start.y * size.height / previewSize.height;
-        final endX = end.x * size.width / previewSize.width;
-        final endY = end.y * size.height / previewSize.height;
-
+      void paintLine(
+          PoseLandmarkType type1, PoseLandmarkType type2, Paint paintType) {
+        final PoseLandmark joint1 = pose.landmarks[type1]!;
+        final PoseLandmark joint2 = pose.landmarks[type2]!;
         canvas.drawLine(
-          Offset(startX, startY),
-          Offset(endX, endY),
-          paint,
-        );
+            Offset(translateX(joint1.x, rotation, size, absoluteImageSize),
+                translateY(joint1.y, rotation, size, absoluteImageSize)),
+            Offset(translateX(joint2.x, rotation, size, absoluteImageSize),
+                translateY(joint2.y, rotation, size, absoluteImageSize)),
+            paintType);
       }
+
+      //Draw arms
+      paintLine(
+          PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow, leftPaint);
+      paintLine(
+          PoseLandmarkType.leftElbow, PoseLandmarkType.leftWrist, leftPaint);
+      paintLine(PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow,
+          rightPaint);
+      paintLine(
+          PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist, rightPaint);
+
+      //Draw Body
+      paintLine(
+          PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip, leftPaint);
+      paintLine(PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip,
+          rightPaint);
+
+      //Draw legs
+      paintLine(
+          PoseLandmarkType.leftHip, PoseLandmarkType.leftAnkle, leftPaint);
+      paintLine(
+          PoseLandmarkType.rightHip, PoseLandmarkType.rightAnkle, rightPaint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  bool shouldRepaint(covariant PosePainter oldDelegate) {
+    return oldDelegate.absoluteImageSize != absoluteImageSize ||
+        oldDelegate.poses != poses;
+  }
 }
+
 
 class SensorPageWrapper extends StatelessWidget {
   final String userName;
