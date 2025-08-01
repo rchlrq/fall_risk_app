@@ -11,6 +11,7 @@ import 'package:path/path.dart' as path;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
 void main() {
   runApp(MaterialApp(
@@ -258,9 +259,17 @@ class _SurveyPageState extends State<SurveyPage> {
                 SizedBox(
                   width: 200,
                   child: TextFormField(
-                    decoration: InputDecoration(labelText: 'Name'),
-                    onSaved: (val) => _formData['Name'] = val ?? '',
-                    validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+                    decoration: InputDecoration(labelText: 'Shoe Size (US)'),
+                    keyboardType: TextInputType.number,
+                    onSaved: (val) => _formData['ShoeSize'] = val ?? '',
+                    validator: (val) {
+                      if (val == null || val.isEmpty) return 'Required';
+                      final parsed = int.tryParse(val);
+                      if (parsed == null) return 'Must be an integer';
+                      if (parsed <= 0) return 'Must be positive';
+                      if (parsed > 20) return 'Must be a realistic shoe size';
+                      return null;
+                    },
                   ),
                 ),
                 SizedBox(height: 16),
@@ -538,7 +547,9 @@ class _VideoPageState extends State<VideoPage> {
 
   // State variables for recording to CSV
   bool _isRecording = false;
+  bool _hasRecorded = false; // Add this to track if we've completed a recording
   final StringBuffer _csvData = StringBuffer();
+  String? _lastSavedFilePath;
 
   @override
   void initState() {
@@ -578,7 +589,7 @@ class _VideoPageState extends State<VideoPage> {
     } catch (e) {
       print('Camera init error: $e');
       setState(() {
-        _poseInfo = 'Failed to initialize camera';
+        _poseInfo = 'Failed to initialize camera: $e';
       });
     }
   }
@@ -588,7 +599,6 @@ class _VideoPageState extends State<VideoPage> {
     _isDetecting = true;
 
     try {
-      // Only support YUV420 format (Android)
       if (image.format.group != ImageFormatGroup.yuv420) {
         setState(() {
           _poseInfo = 'Camera image format not supported: ${image.format.group}';
@@ -602,7 +612,6 @@ class _VideoPageState extends State<VideoPage> {
           InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
               InputImageRotation.rotation0deg;
 
-      // Concatenate all planes as-is
       final WriteBuffer allBytes = WriteBuffer();
       for (final Plane plane in image.planes) {
         allBytes.putUint8List(plane.bytes);
@@ -621,7 +630,6 @@ class _VideoPageState extends State<VideoPage> {
 
       final poses = await _poseDetector.processImage(inputImage);
 
-      // If recording, capture the pose data and add it to the CSV string
       if (_isRecording && poses.isNotEmpty) {
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         for (final pose in poses) {
@@ -644,11 +652,15 @@ class _VideoPageState extends State<VideoPage> {
         _rotation = imageRotation;
         if (poses.isNotEmpty) {
           final pose = poses.first;
-          if (!_isRecording) {
+          if (_isRecording) {
+            _poseInfo = 'Recording... ${pose.landmarks.length} landmarks detected';
+          } else {
             _poseInfo = 'Detected ${pose.landmarks.length} landmarks';
           }
         } else {
-          if (!_isRecording) {
+          if (_isRecording) {
+            _poseInfo = 'Recording... No pose detected';
+          } else {
             _poseInfo = 'No pose detected - Point camera at a person';
           }
         }
@@ -663,6 +675,38 @@ class _VideoPageState extends State<VideoPage> {
     }
   }
 
+  Future<void> _shareCSVFile() async {
+    if (_lastSavedFilePath != null && File(_lastSavedFilePath!).existsSync()) {
+      try {
+        await Share.shareXFiles(
+          [XFile(_lastSavedFilePath!)],
+          text: 'Pose data CSV file for ${widget.userName}',
+          subject: 'Fall Risk Assessment - Pose Data',
+        );
+      } catch (e) {
+        print('Error sharing file: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error sharing file: $e')),
+        );
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No CSV file to share. Please record some data first.')),
+      );
+    }
+  }
+
+  Future<void> _deleteOldFile() async {
+    if (_lastSavedFilePath != null && File(_lastSavedFilePath!).existsSync()) {
+      try {
+        await File(_lastSavedFilePath!).delete();
+        print('Deleted old CSV file: $_lastSavedFilePath');
+      } catch (e) {
+        print('Error deleting old file: $e');
+      }
+    }
+  }
+
   Future<void> _toggleRecording() async {
     if (_isRecording) {
       // Stop recording and save the data
@@ -671,66 +715,64 @@ class _VideoPageState extends State<VideoPage> {
         _poseInfo = 'Recording stopped. Saving data...';
       });
 
-      // 1. Request storage permission
-      var status = await Permission.storage.status;
-      if (!status.isGranted) {
-        status = await Permission.storage.request();
-      }
-
-      if (status.isGranted) {
-        // 2. Get the public Downloads directory
-        // Note: This might return null on some platforms or if the directory doesn't exist.
-        Directory? directory = await getDownloadsDirectory();
-        if (directory == null) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Error: Could not access the Downloads directory.')),
-            );
-            // Re-enable recording button if saving fails
-            setState(() {
-              _isRecording = true; 
-              _poseInfo = 'Recording...';
-            });
-            return;
-        }
-
+      try {
+        final directory = await getApplicationDocumentsDirectory();
         final fileName = '${widget.userName}_poses_${DateTime.now().millisecondsSinceEpoch}.csv';
         final filePath = path.join(directory.path, fileName);
         final file = File(filePath);
 
-        // Write the CSV string to the file
         await file.writeAsString(_csvData.toString());
 
         print('Pose data saved to: $filePath');
 
-        // Save the file path to SharedPreferences
+        _lastSavedFilePath = filePath;
+
         final prefs = await SharedPreferences.getInstance();
         final key = '${widget.userName}:data';
         final data = prefs.getString(key);
         final saved = data != null ? jsonDecode(data) : {};
-        saved['PoseDataPath'] = filePath; // Save the path
+        saved['PoseDataPath'] = filePath;
         await prefs.setString(key, jsonEncode(saved));
 
-        // Clear the buffer and navigate
         _csvData.clear();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Pose data saved to Downloads folder: $fileName')),
-        );
-        widget.onNext();
-
-      } else {
-        // Handle the case where the user denies permission
         setState(() {
-          _poseInfo = 'Storage permission denied. Cannot save file.';
+          _hasRecorded = true; // Mark that we've completed a recording
+          _poseInfo = 'Recording saved! You can now share the CSV file or continue.';
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Storage permission is required to save files.')),
+          SnackBar(content: Text('Pose data saved successfully: $fileName')),
+        );
+
+      } catch (e) {
+        print('Error saving file: $e');
+        setState(() {
+          _poseInfo = 'Error saving file: $e';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving file: $e')),
         );
       }
 
+    } else if (_hasRecorded) {
+      // This is the "Retake" action - delete old file and start fresh
+      await _deleteOldFile();
+      
+      _csvData.clear();
+      _csvData.writeln('timestamp,landmark_type,x,y,z,likelihood');
+      setState(() {
+        _isRecording = true;
+        _hasRecorded = false; // Reset the recording state
+        _lastSavedFilePath = null; // Clear the old file path
+        _poseInfo = 'Recording...';
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Previous recording deleted. Starting new recording...')),
+      );
+
     } else {
-      // Start recording
-      _csvData.clear(); // Clear any previous data
-      // Add the header row for the CSV file
+      // This is the initial "Start Recording" action
+      _csvData.clear();
       _csvData.writeln('timestamp,landmark_type,x,y,z,likelihood');
       setState(() {
         _isRecording = true;
@@ -739,7 +781,6 @@ class _VideoPageState extends State<VideoPage> {
     }
   }
 
-  // ... existing code ...
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -755,6 +796,13 @@ class _VideoPageState extends State<VideoPage> {
             );
           },
         ),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.share),
+            onPressed: _shareCSVFile,
+            tooltip: 'Share CSV File',
+          ),
+        ],
       ),
       body: Center(
         child: !_isCameraInitialized
@@ -764,32 +812,65 @@ class _VideoPageState extends State<VideoPage> {
                   mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // MOVED BUTTON AND TEXT TO THE TOP
                     SizedBox(height: 20),
-                    ElevatedButton(
-                      onPressed: _toggleRecording,
-                      child: Text(_isRecording ? 'Stop & Save Pose Data' : 'Start Recording'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _isRecording ? Colors.red : Colors.green,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ElevatedButton(
+                          onPressed: _toggleRecording,
+                          child: Text(_isRecording 
+                              ? 'Stop & Save Pose Data' 
+                              : _hasRecorded 
+                                  ? 'Retake' 
+                                  : 'Start Recording'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _isRecording 
+                                ? Colors.red 
+                                : _hasRecorded 
+                                    ? Colors.orange 
+                                    : Colors.green,
+                          ),
+                        ),
+                        SizedBox(width: 10),
+                        ElevatedButton.icon(
+                          onPressed: _shareCSVFile,
+                          icon: Icon(Icons.share),
+                          label: Text('Share CSV'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ],
                     ),
+                    
+                    // Add a "Next" button that only shows after recording is complete
+                    if (_hasRecorded && !_isRecording) ...[
+                      SizedBox(height: 10),
+                      ElevatedButton(
+                        onPressed: widget.onNext,
+                        child: Text('Continue to Next Step'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.purple,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                    
                     SizedBox(height: 10),
                     Text(_poseInfo ?? 'Point the camera at a person'),
                     SizedBox(height: 10),
-
-                    // CAMERA PREVIEW REMAINS BELOW
                     AspectRatio(
-                      aspectRatio: 9 / 16, // Force vertical 1080p aspect ratio
+                      aspectRatio: 9 / 16,
                       child: Stack(
                         children: [
                           CameraPreview(_controller!),
-                          // Add pose overlay
                           if (_controller!.value.previewSize != null)
                             CustomPaint(
                               painter: PosePainter(
                                 _poses,
                                 _controller!.value.previewSize!,
-                                _rotation, // Pass the rotation here
+                                _rotation,
                               ),
                               size: Size.infinite,
                             ),
@@ -803,7 +884,6 @@ class _VideoPageState extends State<VideoPage> {
     );
   }
 }
-
 
 
 double translateX(

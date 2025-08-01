@@ -3,6 +3,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     
+    
     <!-- The 'requestLegacyExternalStorage' attribute must be inside the application tag -->
     <application
         android:label="fall_risk"
