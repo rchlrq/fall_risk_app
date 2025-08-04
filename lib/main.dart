@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart'; // Only once!
+import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart'; 
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:permission_handler/permission_handler.dart';
@@ -205,37 +207,142 @@ class _SurveyPageState extends State<SurveyPage> {
   String? _sexError;
 
   void _saveForm() async {
-    final isValid = _formKey.currentState?.validate() ?? false;
+  final isValid = _formKey.currentState?.validate() ?? false;
 
-    if (sex == null) {
-      setState(() {
-        _sexError = 'Please select your sex';
-      });
-    } else {
-      setState(() {
-        _sexError = null;
-      });
-    }
+  if (sex == null) {
+    setState(() {
+      _sexError = 'Please select your sex';
+    });
+  } else {
+    setState(() {
+      _sexError = null;
+    });
+  }
 
-    if (isValid && sex != null) {
-      _formKey.currentState!.save();
-      _formData['Sex'] = sex!;
+  if (isValid && sex != null) {
+    _formKey.currentState!.save();
+    _formData['Sex'] = sex!;
+
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${widget.userName}:data';
+    final existingData = prefs.getString(key);
+    final saved = existingData != null ? jsonDecode(existingData) : {};
+    saved.addAll(_formData);
+    await prefs.setString(key, jsonEncode(saved));
+
+    await _saveDemographicsCSV();
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FallRiskPage(userName: widget.userName),
+      ),
+    );
+  }
+}
+
+Future<void> _saveDemographicsCSV() async {
+  try {
+    final weight = double.parse(_formData['Weight'] ?? '0');
+    final height = double.parse(_formData['Height'] ?? '0');
+    final bmi = height > 0 ? (weight / (height * height)) * 703 : 0.0;
+    
+    final sexBinary = sex == 'Male' ? 1 : 0;
+    
+    final StringBuffer demographicsCSV = StringBuffer();
+    demographicsCSV.writeln('Name,Age,Height_inches,Weight_pounds,Sex_binary,BMI');
+    demographicsCSV.writeln('${widget.userName},${_formData['Age']},${_formData['Height']},${_formData['Weight']},$sexBinary,${bmi.toStringAsFixed(2)}');
+    
+    final directory = await getApplicationDocumentsDirectory();
+    final fileName = '${widget.userName}_demographics.csv';
+    final filePath = path.join(directory.path, fileName);
+    final file = File(filePath);
+    
+    await file.writeAsString(demographicsCSV.toString());
+    
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${widget.userName}:data';
+    final existingData = prefs.getString(key);
+    final saved = existingData != null ? jsonDecode(existingData) : {};
+    saved['DemographicsPath'] = filePath;
+    await prefs.setString(key, jsonEncode(saved));
+    
+    print('Demographics CSV saved to: $filePath');
+    
+  } catch (e) {
+    print('Error saving demographics CSV: $e');
+  }
+}
+
+Future<void> _shareCSVFile() async {
+    try {
+      List<XFile> filesToShare = [];
+      List<String> fileNames = [];
 
       final prefs = await SharedPreferences.getInstance();
       final key = '${widget.userName}:data';
-      final existingData = prefs.getString(key);
-      final saved = existingData != null ? jsonDecode(existingData) : {};
-      saved.addAll(_formData);
-      await prefs.setString(key, jsonEncode(saved));
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => FallRiskPage(userName: widget.userName),
-        ),
+      final demographicsPath = saved['DemographicsPath'] as String?;
+      if (demographicsPath != null && File(demographicsPath).existsSync()) {
+        filesToShare.add(XFile(demographicsPath));
+        fileNames.add(path.basename(demographicsPath));
+      }
+
+      final poseDataPath = saved['PoseDataPath'] as String?;
+      if (poseDataPath != null && File(poseDataPath).existsSync()) {
+        filesToShare.add(XFile(poseDataPath));
+        fileNames.add(path.basename(poseDataPath));
+      }
+
+      final armSeparationPath = saved['ArmSeparationPath'] as String?;
+      if (armSeparationPath != null && File(armSeparationPath).existsSync()) {
+        filesToShare.add(XFile(armSeparationPath));
+        fileNames.add(path.basename(armSeparationPath));
+      }
+
+      final handSeparationPath = saved['HandSeparationPath'] as String?;
+      if (handSeparationPath != null && File(handSeparationPath).existsSync()) {
+        filesToShare.add(XFile(handSeparationPath));
+        fileNames.add(path.basename(handSeparationPath));
+      }
+
+      final trunkSwingPath = saved['TrunkSwingPath'] as String?;
+      if (trunkSwingPath != null && File(trunkSwingPath).existsSync()) {
+        filesToShare.add(XFile(trunkSwingPath));
+        fileNames.add(path.basename(trunkSwingPath));
+      }
+
+      final heelSeparationPath = saved['HeelSeparationPath'] as String?;
+      if (heelSeparationPath != null && File(heelSeparationPath).existsSync()) {
+        filesToShare.add(XFile(heelSeparationPath));
+        fileNames.add(path.basename(heelSeparationPath));
+      }
+
+      if (filesToShare.isNotEmpty) {
+        await Share.shareXFiles(
+          filesToShare,
+          text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
+          subject: 'Fall Risk Assessment - Complete Data Package', // Updated subject
+        );
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sharing ${filesToShare.length} CSV file(s): ${fileNames.join(', ')}')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No CSV files to share. Please record some data first.')),
+        );
+      }
+    } catch (e) {
+      print('Error sharing files: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error sharing files: $e')),
       );
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -368,6 +475,8 @@ class _SurveyPageState extends State<SurveyPage> {
       ),
     );
   }
+
+  
 }
 
 class FallRiskPage extends StatefulWidget {
@@ -500,15 +609,13 @@ class _FallRiskPageState extends State<FallRiskPage> {
                 child: Text("Next"),
               ),
             ),
-            SizedBox(height: 16), // Extra space at bottom
+            SizedBox(height: 16), 
           ],
         ),
       ),
     );
   }
 }
-
-// ... existing code before VideoPageWrapper ...
 
 class VideoPageWrapper extends StatelessWidget {
   final String userName;
@@ -545,11 +652,14 @@ class _VideoPageState extends State<VideoPage> {
   List<Pose> _poses = [];
   InputImageRotation _rotation = InputImageRotation.rotation0deg;
 
-  // State variables for recording to CSV
   bool _isRecording = false;
-  bool _hasRecorded = false; // Add this to track if we've completed a recording
+  bool _hasRecorded = false;
   final StringBuffer _csvData = StringBuffer();
   String? _lastSavedFilePath;
+  
+  DateTime? _recordingStartTime;
+  Duration _recordingDuration = Duration.zero;
+  Timer? _timer;
 
   @override
   void initState() {
@@ -562,7 +672,31 @@ class _VideoPageState extends State<VideoPage> {
   void dispose() {
     _controller?.dispose();
     _poseDetector.close();
+    _timer?.cancel(); 
     super.dispose();
+  }
+
+  void _startTimer() {
+    _recordingStartTime = DateTime.now();
+    _timer = Timer.periodic(Duration(seconds: 1), (timer) {
+      if (_isRecording && _recordingStartTime != null) {
+        setState(() {
+          _recordingDuration = DateTime.now().difference(_recordingStartTime!);
+        });
+      }
+    });
+  }
+
+  void _stopTimer() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$twoDigitMinutes:$twoDigitSeconds";
   }
 
   Future<void> _initializeCamera() async {
@@ -675,27 +809,6 @@ class _VideoPageState extends State<VideoPage> {
     }
   }
 
-  Future<void> _shareCSVFile() async {
-    if (_lastSavedFilePath != null && File(_lastSavedFilePath!).existsSync()) {
-      try {
-        await Share.shareXFiles(
-          [XFile(_lastSavedFilePath!)],
-          text: 'Pose data CSV file for ${widget.userName}',
-          subject: 'Fall Risk Assessment - Pose Data',
-        );
-      } catch (e) {
-        print('Error sharing file: $e');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error sharing file: $e')),
-        );
-      }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No CSV file to share. Please record some data first.')),
-      );
-    }
-  }
-
   Future<void> _deleteOldFile() async {
     if (_lastSavedFilePath != null && File(_lastSavedFilePath!).existsSync()) {
       try {
@@ -706,10 +819,825 @@ class _VideoPageState extends State<VideoPage> {
       }
     }
   }
+  
+  Future<void> _processPoseData(String csvFilePath) async {
+    try {
+      setState(() {
+        _poseInfo = 'Processing pose data...';
+      });
+
+      final originalFile = File(csvFilePath);
+      if (!originalFile.existsSync()) {
+        throw Exception('Original CSV file not found');
+      }
+
+      final csvContent = await originalFile.readAsString();
+      final lines = csvContent.split('\n');
+      
+      final List<Map<String, dynamic>> rawData = [];
+      
+      for (int i = 1; i < lines.length; i++) {
+        final line = lines[i].trim();
+        if (line.isEmpty) continue;
+        
+        final parts = line.split(',');
+        if (parts.length >= 6) {
+          rawData.add({
+            'timestamp': parts[0],
+            'landmark_type': parts[1],
+            'x': parts[2],
+            'y': parts[3], 
+            'z': parts[4],
+            'likelihood': parts[5],
+          });
+        }
+      }
+
+      final Map<String, List<Map<String, dynamic>>> groupedData = {};
+      for (final row in rawData) {
+        final timestamp = row['timestamp'];
+        if (!groupedData.containsKey(timestamp)) {
+          groupedData[timestamp] = [];
+        }
+        groupedData[timestamp]!.add(row);
+      }
+
+      final jointNames = [
+        'Nose', 'Left Eye Inner', 'Left Eye', 'Left Eye Outer', 'Right Eye Inner', 'Right Eye', 'Right Eye Outer',
+        'Left Ear', 'Right Ear', 'Mouth Left', 'Mouth Right', 'Left Shoulder', 'Right Shoulder',
+        'Left Elbow', 'Right Elbow', 'Left Wrist', 'Right Wrist', 'Left Pinky', 'Right Pinky',
+        'Left Index', 'Right Index', 'Left Thumb', 'Right Thumb', 'Left Hip', 'Right Hip',
+        'Left Knee', 'Right Knee', 'Left Ankle', 'Right Ankle', 'Left Heel', 'Right Heel',
+        'Left Foot Index', 'Right Foot Index'
+      ];
+
+      final Map<String, String> mediapipeToHeader = {
+        'nose': 'Nose',
+        'leftEyeInner': 'Left Eye Inner',
+        'leftEye': 'Left Eye', 
+        'leftEyeOuter': 'Left Eye Outer',
+        'rightEyeInner': 'Right Eye Inner',
+        'rightEye': 'Right Eye',
+        'rightEyeOuter': 'Right Eye Outer',
+        'leftEar': 'Left Ear',
+        'rightEar': 'Right Ear',
+        'leftMouth': 'Mouth Left',
+        'rightMouth': 'Mouth Right',
+        'leftShoulder': 'Left Shoulder',
+        'rightShoulder': 'Right Shoulder',
+        'leftElbow': 'Left Elbow',
+        'rightElbow': 'Right Elbow',
+        'leftWrist': 'Left Wrist',
+        'rightWrist': 'Right Wrist',
+        'leftPinky': 'Left Pinky',
+        'rightPinky': 'Right Pinky',
+        'leftIndex': 'Left Index',
+        'rightIndex': 'Right Index',
+        'leftThumb': 'Left Thumb',
+        'rightThumb': 'Right Thumb',
+        'leftHip': 'Left Hip',
+        'rightHip': 'Right Hip',
+        'leftKnee': 'Left Knee',
+        'rightKnee': 'Right Knee',
+        'leftAnkle': 'Left Ankle',
+        'rightAnkle': 'Right Ankle',
+        'leftHeel': 'Left Heel',
+        'rightHeel': 'Right Heel',
+        'leftFootIndex': 'Left Foot Index',
+        'rightFootIndex': 'Right Foot Index'
+      };
+
+      final StringBuffer restructuredData = StringBuffer();
+      
+      restructuredData.writeln('Frame Number,${jointNames.join(',')}');
+      
+      final timestamps = groupedData.keys.toList()..sort();
+      
+      for (int frameIdx = 0; frameIdx < timestamps.length; frameIdx++) {
+        final timestamp = timestamps[frameIdx];
+        final timestampData = groupedData[timestamp]!;
+        
+        final Map<String, double> xCoords = {};
+        final Map<String, double> yCoords = {};
+        final Map<String, double> zCoords = {};
+        
+        for (final joint in jointNames) {
+          xCoords[joint] = double.nan;
+          yCoords[joint] = double.nan;
+          zCoords[joint] = double.nan;
+        }
+        
+        for (final row in timestampData) {
+          final originalJointName = row['landmark_type'];
+          if (mediapipeToHeader.containsKey(originalJointName)) {
+            final headerName = mediapipeToHeader[originalJointName]!;
+            xCoords[headerName] = double.tryParse(row['x']) ?? double.nan;
+            yCoords[headerName] = double.tryParse(row['y']) ?? double.nan;
+            zCoords[headerName] = double.tryParse(row['z']) ?? double.nan;
+          }
+        }
+        
+        final List<String> xRow = [frameIdx.toString()];
+        final List<String> yRow = [frameIdx.toString()];
+        final List<String> zRow = [frameIdx.toString()];
+        
+        for (final joint in jointNames) {
+          xRow.add(xCoords[joint]!.isNaN ? '' : xCoords[joint].toString());
+          yRow.add(yCoords[joint]!.isNaN ? '' : yCoords[joint].toString());
+          zRow.add(zCoords[joint]!.isNaN ? '' : zCoords[joint].toString());
+        }
+        
+        restructuredData.writeln(xRow.join(','));
+        restructuredData.writeln(yRow.join(','));
+        restructuredData.writeln(zRow.join(','));
+      }
+
+      final directory = await getApplicationDocumentsDirectory();
+      final originalFileName = path.basename(csvFilePath);
+      final nameWithoutExtension = path.basenameWithoutExtension(originalFileName);
+      final newFileName = '${nameWithoutExtension}_restructured.csv';
+      final newFilePath = path.join(directory.path, newFileName);
+      
+      final newFile = File(newFilePath);
+      await newFile.writeAsString(restructuredData.toString());
+      
+      await originalFile.delete();
+      
+      _lastSavedFilePath = newFilePath;
+      
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+      saved['PoseDataPath'] = newFilePath;
+      await prefs.setString(key, jsonEncode(saved));
+      
+      setState(() {
+        _poseInfo = 'Pose data processed and restructured!';
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Pose data restructured successfully: $newFileName')),
+      );
+      
+    } catch (e) {
+      print('Error processing pose data: $e');
+      setState(() {
+        _poseInfo = 'Error processing pose data: $e';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error processing pose data: $e')),
+      );
+    }
+  }
+  
+  Future<void> _calculateArmSeparation(String restructuredFilePath) async {
+    try {
+      setState(() {
+        _poseInfo = 'Calculating arm separation...';
+      });
+
+      final file = File(restructuredFilePath);
+      if (!file.existsSync()) {
+        throw Exception('Restructured CSV file not found');
+      }
+
+      final csvContent = await file.readAsString();
+      final lines = csvContent.split('\n');
+      
+      if (lines.isEmpty) {
+        throw Exception('CSV file is empty');
+      }
+
+      final headers = lines[0].split(',');
+      final leftShoulderIdx = headers.indexOf('Left Shoulder');
+      final rightShoulderIdx = headers.indexOf('Right Shoulder');
+      final leftElbowIdx = headers.indexOf('Left Elbow');
+      final rightElbowIdx = headers.indexOf('Right Elbow');
+      final leftHipIdx = headers.indexOf('Left Hip');
+      final rightHipIdx = headers.indexOf('Right Hip');
+
+      if (leftShoulderIdx == -1 || rightShoulderIdx == -1 || 
+          leftElbowIdx == -1 || rightElbowIdx == -1 ||
+          leftHipIdx == -1 || rightHipIdx == -1) {
+        throw Exception('Required joint columns not found in CSV');
+      }
+
+      final Map<int, List<List<String>>> frameGroups = {};
+      
+      for (int i = 1; i < lines.length; i++) {
+        final line = lines[i].trim();
+        if (line.isEmpty) continue;
+        
+        final parts = line.split(',');
+        if (parts.isEmpty) continue;
+        
+        final frameNumber = int.tryParse(parts[0]);
+        if (frameNumber == null) continue;
+        
+        if (!frameGroups.containsKey(frameNumber)) {
+          frameGroups[frameNumber] = [];
+        }
+        frameGroups[frameNumber]!.add(parts);
+      }
+
+      final List<Map<String, double>> armSeparationData = [];
+      
+      for (final frameNumber in frameGroups.keys.toList()..sort()) {
+        final frameData = frameGroups[frameNumber]!;
+        
+        if (frameData.length == 3) { 
+          try {
+            final leftShoulderX = double.tryParse(frameData[0][leftShoulderIdx]) ?? 0.0;
+            final leftShoulderY = double.tryParse(frameData[1][leftShoulderIdx]) ?? 0.0;
+            final leftShoulderZ = double.tryParse(frameData[2][leftShoulderIdx]) ?? 0.0;
+            final leftShoulder = [leftShoulderX, leftShoulderY, leftShoulderZ];
+
+            final rightShoulderX = double.tryParse(frameData[0][rightShoulderIdx]) ?? 0.0;
+            final rightShoulderY = double.tryParse(frameData[1][rightShoulderIdx]) ?? 0.0;
+            final rightShoulderZ = double.tryParse(frameData[2][rightShoulderIdx]) ?? 0.0;
+            final rightShoulder = [rightShoulderX, rightShoulderY, rightShoulderZ];
+
+            final leftElbowX = double.tryParse(frameData[0][leftElbowIdx]) ?? 0.0;
+            final leftElbowY = double.tryParse(frameData[1][leftElbowIdx]) ?? 0.0;
+            final leftElbowZ = double.tryParse(frameData[2][leftElbowIdx]) ?? 0.0;
+            final leftElbow = [leftElbowX, leftElbowY, leftElbowZ];
+
+            final rightElbowX = double.tryParse(frameData[0][rightElbowIdx]) ?? 0.0;
+            final rightElbowY = double.tryParse(frameData[1][rightElbowIdx]) ?? 0.0;
+            final rightElbowZ = double.tryParse(frameData[2][rightElbowIdx]) ?? 0.0;
+            final rightElbow = [rightElbowX, rightElbowY, rightElbowZ];
+
+            final leftHipX = double.tryParse(frameData[0][leftHipIdx]) ?? 0.0;
+            final leftHipY = double.tryParse(frameData[1][leftHipIdx]) ?? 0.0;
+            final leftHipZ = double.tryParse(frameData[2][leftHipIdx]) ?? 0.0;
+            final leftHip = [leftHipX, leftHipY, leftHipZ];
+
+            final rightHipX = double.tryParse(frameData[0][rightHipIdx]) ?? 0.0;
+            final rightHipY = double.tryParse(frameData[1][rightHipIdx]) ?? 0.0;
+            final rightHipZ = double.tryParse(frameData[2][rightHipIdx]) ?? 0.0;
+            final rightHip = [rightHipX, rightHipY, rightHipZ];
+
+            final separationLeft = _calculateAngle(leftElbow, leftShoulder, leftHip);
+            final separationRight = _calculateAngle(rightElbow, rightShoulder, rightHip);
+
+            armSeparationData.add({
+              'separation_left': separationLeft,
+              'separation_right': separationRight,
+            });
+            
+          } catch (e) {
+            print('Error processing frame $frameNumber: $e');
+            armSeparationData.add({
+              'separation_left': 0.0,
+              'separation_right': 0.0,
+            });
+          }
+        }
+      }
+
+      final StringBuffer armSeparationCsv = StringBuffer();
+      armSeparationCsv.writeln('separation_left,separation_right');
+      
+      for (final data in armSeparationData) {
+        armSeparationCsv.writeln('${data['separation_left']},${data['separation_right']}');
+      }
+
+      final directory = await getApplicationDocumentsDirectory();
+      final armSeparationFileName = '${widget.userName}_arm_separation.csv';
+      final armSeparationFilePath = path.join(directory.path, armSeparationFileName);
+      final armSeparationFile = File(armSeparationFilePath);
+      
+      await armSeparationFile.writeAsString(armSeparationCsv.toString());
+
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+      saved['ArmSeparationPath'] = armSeparationFilePath;
+      await prefs.setString(key, jsonEncode(saved));
+
+      setState(() {
+        _poseInfo = 'Arm separation calculated successfully!';
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Arm separation data saved: $armSeparationFileName')),
+      );
+      
+    } catch (e) {
+      print('Error calculating arm separation: $e');
+      setState(() {
+        _poseInfo = 'Error calculating arm separation: $e';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error calculating arm separation: $e')),
+      );
+    }
+  }
+
+
+  Future<void> _calculateHandSeparation(String restructuredFilePath) async {
+    try {
+      setState(() {
+        _poseInfo = 'Calculating hand separation...';
+      });
+
+      final file = File(restructuredFilePath);
+      if (!file.existsSync()) {
+        throw Exception('Restructured CSV file not found');
+      }
+
+      final csvContent = await file.readAsString();
+      final lines = csvContent.split('\n');
+      
+      if (lines.isEmpty) {
+        throw Exception('CSV file is empty');
+      }
+
+      final headers = lines[0].split(',');
+      final leftWristIdx = headers.indexOf('Left Wrist');
+      final rightWristIdx = headers.indexOf('Right Wrist');
+      final leftElbowIdx = headers.indexOf('Left Elbow');
+      final rightElbowIdx = headers.indexOf('Right Elbow');
+      final leftShoulderIdx = headers.indexOf('Left Shoulder');
+      final rightShoulderIdx = headers.indexOf('Right Shoulder');
+
+      if (leftWristIdx == -1 || rightWristIdx == -1 || 
+          leftElbowIdx == -1 || rightElbowIdx == -1 ||
+          leftShoulderIdx == -1 || rightShoulderIdx == -1) {
+        throw Exception('Required joint columns not found in CSV');
+      }
+
+      final Map<int, List<List<String>>> frameGroups = {};
+      
+      for (int i = 1; i < lines.length; i++) {
+        final line = lines[i].trim();
+        if (line.isEmpty) continue;
+        
+        final parts = line.split(',');
+        if (parts.isEmpty) continue;
+        
+        final frameNumber = int.tryParse(parts[0]);
+        if (frameNumber == null) continue;
+        
+        if (!frameGroups.containsKey(frameNumber)) {
+          frameGroups[frameNumber] = [];
+        }
+        frameGroups[frameNumber]!.add(parts);
+      }
+
+      final List<Map<String, double>> handSeparationData = [];
+      
+      for (final frameNumber in frameGroups.keys.toList()..sort()) {
+        final frameData = frameGroups[frameNumber]!;
+        
+        if (frameData.length == 3) { 
+          try {
+            final leftWristX = double.tryParse(frameData[0][leftWristIdx]) ?? 0.0;
+            final leftWristY = double.tryParse(frameData[1][leftWristIdx]) ?? 0.0;
+            final leftWristZ = double.tryParse(frameData[2][leftWristIdx]) ?? 0.0;
+            final leftWrist = [leftWristX, leftWristY, leftWristZ];
+
+            final rightWristX = double.tryParse(frameData[0][rightWristIdx]) ?? 0.0;
+            final rightWristY = double.tryParse(frameData[1][rightWristIdx]) ?? 0.0;
+            final rightWristZ = double.tryParse(frameData[2][rightWristIdx]) ?? 0.0;
+            final rightWrist = [rightWristX, rightWristY, rightWristZ];
+
+            final leftElbowX = double.tryParse(frameData[0][leftElbowIdx]) ?? 0.0;
+            final leftElbowY = double.tryParse(frameData[1][leftElbowIdx]) ?? 0.0;
+            final leftElbowZ = double.tryParse(frameData[2][leftElbowIdx]) ?? 0.0;
+            final leftElbow = [leftElbowX, leftElbowY, leftElbowZ];
+
+            final rightElbowX = double.tryParse(frameData[0][rightElbowIdx]) ?? 0.0;
+            final rightElbowY = double.tryParse(frameData[1][rightElbowIdx]) ?? 0.0;
+            final rightElbowZ = double.tryParse(frameData[2][rightElbowIdx]) ?? 0.0;
+            final rightElbow = [rightElbowX, rightElbowY, rightElbowZ];
+
+            final leftShoulderX = double.tryParse(frameData[0][leftShoulderIdx]) ?? 0.0;
+            final leftShoulderY = double.tryParse(frameData[1][leftShoulderIdx]) ?? 0.0;
+            final leftShoulderZ = double.tryParse(frameData[2][leftShoulderIdx]) ?? 0.0;
+            final leftShoulder = [leftShoulderX, leftShoulderY, leftShoulderZ];
+
+            final rightShoulderX = double.tryParse(frameData[0][rightShoulderIdx]) ?? 0.0;
+            final rightShoulderY = double.tryParse(frameData[1][rightShoulderIdx]) ?? 0.0;
+            final rightShoulderZ = double.tryParse(frameData[2][rightShoulderIdx]) ?? 0.0;
+            final rightShoulder = [rightShoulderX, rightShoulderY, rightShoulderZ];
+
+            final separationLeft = _calculateAngle(leftWrist, leftElbow, leftShoulder);
+            final separationRight = _calculateAngle(rightWrist, rightElbow, rightShoulder);
+
+            handSeparationData.add({
+              'hand_separation_left': separationLeft,
+              'hand_separation_right': separationRight,
+            });
+            
+          } catch (e) {
+            print('Error processing frame $frameNumber: $e');
+            handSeparationData.add({
+              'hand_separation_left': 0.0,
+              'hand_separation_right': 0.0,
+            });
+          }
+        }
+      }
+
+      final StringBuffer handSeparationCsv = StringBuffer();
+      handSeparationCsv.writeln('hand_separation_left,hand_separation_right');
+      
+      for (final data in handSeparationData) {
+        handSeparationCsv.writeln('${data['hand_separation_left']},${data['hand_separation_right']}');
+      }
+
+      final directory = await getApplicationDocumentsDirectory();
+      final handSeparationFileName = '${widget.userName}_hand_separation.csv';
+      final handSeparationFilePath = path.join(directory.path, handSeparationFileName);
+      final handSeparationFile = File(handSeparationFilePath);
+      
+      await handSeparationFile.writeAsString(handSeparationCsv.toString());
+
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+      saved['HandSeparationPath'] = handSeparationFilePath;
+      await prefs.setString(key, jsonEncode(saved));
+
+      setState(() {
+        _poseInfo = 'Hand separation calculated successfully!';
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Hand separation data saved: $handSeparationFileName')),
+      );
+      
+    } catch (e) {
+      print('Error calculating hand separation: $e');
+      setState(() {
+        _poseInfo = 'Error calculating hand separation: $e';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error calculating hand separation: $e')),
+      );
+    }
+  }
+
+  Future<void> _calculateTrunkSwing(String restructuredFilePath) async {
+    try {
+      setState(() {
+        _poseInfo = 'Calculating trunk swing...';
+      });
+
+      final file = File(restructuredFilePath);
+      if (!file.existsSync()) {
+        throw Exception('Restructured CSV file not found');
+      }
+
+      final csvContent = await file.readAsString();
+      final lines = csvContent.split('\n');
+      
+      if (lines.isEmpty) {
+        throw Exception('CSV file is empty');
+      }
+
+      final headers = lines[0].split(',');
+      final leftShoulderIdx = headers.indexOf('Left Shoulder');
+      final rightShoulderIdx = headers.indexOf('Right Shoulder');
+
+      if (leftShoulderIdx == -1 || rightShoulderIdx == -1) {
+        throw Exception('Required shoulder columns not found in CSV');
+      }
+
+      final Map<int, List<List<String>>> frameGroups = {};
+      
+      for (int i = 1; i < lines.length; i++) {
+        final line = lines[i].trim();
+        if (line.isEmpty) continue;
+        
+        final parts = line.split(',');
+        if (parts.isEmpty) continue;
+        
+        final frameNumber = int.tryParse(parts[0]);
+        if (frameNumber == null) continue;
+        
+        if (!frameGroups.containsKey(frameNumber)) {
+          frameGroups[frameNumber] = [];
+        }
+        frameGroups[frameNumber]!.add(parts);
+      }
+
+      final List<Map<String, double>> trunkSwingData = [];
+      
+      for (final frameNumber in frameGroups.keys.toList()..sort()) {
+        final frameData = frameGroups[frameNumber]!;
+        
+        if (frameData.length == 3) { 
+          try {
+            final leftShoulderX = double.tryParse(frameData[0][leftShoulderIdx]) ?? 0.0;
+            final leftShoulderY = double.tryParse(frameData[1][leftShoulderIdx]) ?? 0.0;
+            final leftShoulderZ = double.tryParse(frameData[2][leftShoulderIdx]) ?? 0.0;
+            final leftShoulder = [leftShoulderX, leftShoulderY, leftShoulderZ];
+
+            final rightShoulderX = double.tryParse(frameData[0][rightShoulderIdx]) ?? 0.0;
+            final rightShoulderY = double.tryParse(frameData[1][rightShoulderIdx]) ?? 0.0;
+            final rightShoulderZ = double.tryParse(frameData[2][rightShoulderIdx]) ?? 0.0;
+            final rightShoulder = [rightShoulderX, rightShoulderY, rightShoulderZ];
+
+            List<double> flat;
+            if (leftShoulder[1] > rightShoulder[1]) {
+              flat = [0, leftShoulder[1], leftShoulder[1]];
+            } else {
+              flat = [0, rightShoulder[1], rightShoulder[1]];
+            }
+
+            final trunkSwing = _calculateAngle(leftShoulder, rightShoulder, flat);
+
+            trunkSwingData.add({
+              'trunk_swing': trunkSwing,
+            });
+            
+          } catch (e) {
+            print('Error processing frame $frameNumber: $e');
+            trunkSwingData.add({
+              'trunk_swing': 0.0,
+            });
+          }
+        }
+      }
+
+      final StringBuffer trunkSwingCsv = StringBuffer();
+      trunkSwingCsv.writeln('trunk_swing');
+      
+      for (final data in trunkSwingData) {
+        trunkSwingCsv.writeln('${data['trunk_swing']}');
+      }
+
+      final directory = await getApplicationDocumentsDirectory();
+      final trunkSwingFileName = '${widget.userName}_trunk_swing.csv';
+      final trunkSwingFilePath = path.join(directory.path, trunkSwingFileName);
+      final trunkSwingFile = File(trunkSwingFilePath);
+      
+      await trunkSwingFile.writeAsString(trunkSwingCsv.toString());
+
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+      saved['TrunkSwingPath'] = trunkSwingFilePath;
+      await prefs.setString(key, jsonEncode(saved));
+
+      setState(() {
+        _poseInfo = 'Trunk swing calculated successfully!';
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Trunk swing data saved: $trunkSwingFileName')),
+      );
+      
+    } catch (e) {
+      print('Error calculating trunk swing: $e');
+      setState(() {
+        _poseInfo = 'Error calculating trunk swing: $e';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error calculating trunk swing: $e')),
+      );
+    }
+  }
+
+  Future<void> _calculateHeelSeparation(String restructuredFilePath) async {
+    try {
+      setState(() {
+        _poseInfo = 'Calculating heel separation...';
+      });
+
+      final file = File(restructuredFilePath);
+      if (!file.existsSync()) {
+        throw Exception('Restructured CSV file not found');
+      }
+
+      final csvContent = await file.readAsString();
+      final lines = csvContent.split('\n');
+      
+      if (lines.isEmpty) {
+        throw Exception('CSV file is empty');
+      }
+
+      final headers = lines[0].split(',');
+      final leftHeelIdx = headers.indexOf('Left Heel');
+      final rightHeelIdx = headers.indexOf('Right Heel');
+      final leftAnkleIdx = headers.indexOf('Left Ankle');
+      final rightAnkleIdx = headers.indexOf('Right Ankle');
+      final leftKneeIdx = headers.indexOf('Left Knee');
+      final rightKneeIdx = headers.indexOf('Right Knee');
+
+      if (leftHeelIdx == -1 || rightHeelIdx == -1 || 
+          leftAnkleIdx == -1 || rightAnkleIdx == -1 ||
+          leftKneeIdx == -1 || rightKneeIdx == -1) {
+        throw Exception('Required joint columns not found in CSV');
+      }
+
+      final Map<int, List<List<String>>> frameGroups = {};
+      
+      for (int i = 1; i < lines.length; i++) {
+        final line = lines[i].trim();
+        if (line.isEmpty) continue;
+        
+        final parts = line.split(',');
+        if (parts.isEmpty) continue;
+        
+        final frameNumber = int.tryParse(parts[0]);
+        if (frameNumber == null) continue;
+        
+        if (!frameGroups.containsKey(frameNumber)) {
+          frameGroups[frameNumber] = [];
+        }
+        frameGroups[frameNumber]!.add(parts);
+      }
+
+      final List<Map<String, double>> heelSeparationData = [];
+      
+      for (final frameNumber in frameGroups.keys.toList()..sort()) {
+        final frameData = frameGroups[frameNumber]!;
+        
+        if (frameData.length == 3) { 
+          try {
+            final leftHeelX = double.tryParse(frameData[0][leftHeelIdx]) ?? 0.0;
+            final leftHeelY = double.tryParse(frameData[1][leftHeelIdx]) ?? 0.0;
+            final leftHeelZ = double.tryParse(frameData[2][leftHeelIdx]) ?? 0.0;
+            final leftHeel = [leftHeelX, leftHeelY, leftHeelZ];
+
+            final rightHeelX = double.tryParse(frameData[0][rightHeelIdx]) ?? 0.0;
+            final rightHeelY = double.tryParse(frameData[1][rightHeelIdx]) ?? 0.0;
+            final rightHeelZ = double.tryParse(frameData[2][rightHeelIdx]) ?? 0.0;
+            final rightHeel = [rightHeelX, rightHeelY, rightHeelZ];
+
+            final leftAnkleX = double.tryParse(frameData[0][leftAnkleIdx]) ?? 0.0;
+            final leftAnkleY = double.tryParse(frameData[1][leftAnkleIdx]) ?? 0.0;
+            final leftAnkleZ = double.tryParse(frameData[2][leftAnkleIdx]) ?? 0.0;
+            final leftAnkle = [leftAnkleX, leftAnkleY, leftAnkleZ];
+
+            final rightAnkleX = double.tryParse(frameData[0][rightAnkleIdx]) ?? 0.0;
+            final rightAnkleY = double.tryParse(frameData[1][rightAnkleIdx]) ?? 0.0;
+            final rightAnkleZ = double.tryParse(frameData[2][rightAnkleIdx]) ?? 0.0;
+            final rightAnkle = [rightAnkleX, rightAnkleY, rightAnkleZ];
+
+            final leftKneeX = double.tryParse(frameData[0][leftKneeIdx]) ?? 0.0;
+            final leftKneeY = double.tryParse(frameData[1][leftKneeIdx]) ?? 0.0;
+            final leftKneeZ = double.tryParse(frameData[2][leftKneeIdx]) ?? 0.0;
+            final leftKnee = [leftKneeX, leftKneeY, leftKneeZ];
+
+            final rightKneeX = double.tryParse(frameData[0][rightKneeIdx]) ?? 0.0;
+            final rightKneeY = double.tryParse(frameData[1][rightKneeIdx]) ?? 0.0;
+            final rightKneeZ = double.tryParse(frameData[2][rightKneeIdx]) ?? 0.0;
+            final rightKnee = [rightKneeX, rightKneeY, rightKneeZ];
+
+            final separationLeft = _calculateAngle(leftHeel, leftAnkle, leftKnee);
+            final separationRight = _calculateAngle(rightHeel, rightAnkle, rightKnee);
+
+            heelSeparationData.add({
+              'heel_separation_left': separationLeft,
+              'heel_separation_right': separationRight,
+            });
+            
+          } catch (e) {
+            print('Error processing frame $frameNumber: $e');
+            heelSeparationData.add({
+              'heel_separation_left': 0.0,
+              'heel_separation_right': 0.0,
+            });
+          }
+        }
+      }
+
+      final StringBuffer heelSeparationCsv = StringBuffer();
+      heelSeparationCsv.writeln('heel_separation_left,heel_separation_right');
+      
+      for (final data in heelSeparationData) {
+        heelSeparationCsv.writeln('${data['heel_separation_left']},${data['heel_separation_right']}');
+      }
+
+      final directory = await getApplicationDocumentsDirectory();
+      final heelSeparationFileName = '${widget.userName}_heel_separation.csv';
+      final heelSeparationFilePath = path.join(directory.path, heelSeparationFileName);
+      final heelSeparationFile = File(heelSeparationFilePath);
+      
+      await heelSeparationFile.writeAsString(heelSeparationCsv.toString());
+
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+      saved['HeelSeparationPath'] = heelSeparationFilePath;
+      await prefs.setString(key, jsonEncode(saved));
+
+      setState(() {
+        _poseInfo = 'Heel separation calculated successfully!';
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Heel separation data saved: $heelSeparationFileName')),
+      );
+      
+    } catch (e) {
+      print('Error calculating heel separation: $e');
+      setState(() {
+        _poseInfo = 'Error calculating heel separation: $e';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error calculating heel separation: $e')),
+      );
+    }
+  }
+
+  Future<void> _shareCSVFile() async {
+    try {
+      List<XFile> filesToShare = [];
+      List<String> fileNames = [];
+
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+
+      final demographicsPath = saved['DemographicsPath'] as String?;
+      if (demographicsPath != null && File(demographicsPath).existsSync()) {
+        filesToShare.add(XFile(demographicsPath));
+        fileNames.add(path.basename(demographicsPath));
+      }
+
+      final poseDataPath = saved['PoseDataPath'] as String?;
+      if (poseDataPath != null && File(poseDataPath).existsSync()) {
+        filesToShare.add(XFile(poseDataPath));
+        fileNames.add(path.basename(poseDataPath));
+      }
+
+      final armSeparationPath = saved['ArmSeparationPath'] as String?;
+      if (armSeparationPath != null && File(armSeparationPath).existsSync()) {
+        filesToShare.add(XFile(armSeparationPath));
+        fileNames.add(path.basename(armSeparationPath));
+      }
+
+      final handSeparationPath = saved['HandSeparationPath'] as String?;
+      if (handSeparationPath != null && File(handSeparationPath).existsSync()) {
+        filesToShare.add(XFile(handSeparationPath));
+        fileNames.add(path.basename(handSeparationPath));
+      }
+
+      final trunkSwingPath = saved['TrunkSwingPath'] as String?;
+      if (trunkSwingPath != null && File(trunkSwingPath).existsSync()) {
+        filesToShare.add(XFile(trunkSwingPath));
+        fileNames.add(path.basename(trunkSwingPath));
+      }
+
+      final heelSeparationPath = saved['HeelSeparationPath'] as String?;
+      if (heelSeparationPath != null && File(heelSeparationPath).existsSync()) {
+        filesToShare.add(XFile(heelSeparationPath));
+        fileNames.add(path.basename(heelSeparationPath));
+      }
+
+      if (filesToShare.isNotEmpty) {
+        await Share.shareXFiles(
+          filesToShare,
+          text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
+          subject: 'Fall Risk Assessment - Pose Data & Analysis',
+        );
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sharing ${filesToShare.length} CSV file(s): ${fileNames.join(', ')}')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No CSV files to share. Please record some data first.')),
+        );
+      }
+    } catch (e) {
+      print('Error sharing files: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error sharing files: $e')),
+      );
+    }
+  }
+
+
+  double _calculateAngle(List<double> a, List<double> b, List<double> c) {
+   
+    final double radians = math.atan2(c[1] - b[1], c[0] - b[0]) - 
+                          math.atan2(a[1] - b[1], a[0] - b[0]);
+    
+    double angle = (radians * 180.0 / math.pi).abs();
+    
+    if (angle > 180.0) {
+      angle = 360.0 - angle;
+    }
+    
+    return angle;
+  }
 
   Future<void> _toggleRecording() async {
     if (_isRecording) {
-      // Stop recording and save the data
+      _stopTimer(); 
+      
       setState(() {
         _isRecording = false;
         _poseInfo = 'Recording stopped. Saving data...';
@@ -734,13 +1662,20 @@ class _VideoPageState extends State<VideoPage> {
         saved['PoseDataPath'] = filePath;
         await prefs.setString(key, jsonEncode(saved));
 
+        await _processPoseData(filePath);
+        await _calculateArmSeparation(_lastSavedFilePath!);
+        await _calculateHandSeparation(_lastSavedFilePath!);
+        await _calculateTrunkSwing(_lastSavedFilePath!);
+        await _calculateHeelSeparation(_lastSavedFilePath!);
+
+
         _csvData.clear();
         setState(() {
-          _hasRecorded = true; // Mark that we've completed a recording
-          _poseInfo = 'Recording saved! You can now share the CSV file or continue.';
+          _hasRecorded = true;
+          _poseInfo = 'Recording saved! Duration: ${_formatDuration(_recordingDuration)}';
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Pose data saved successfully: $fileName')),
+          SnackBar(content: Text('Pose data saved successfully: $fileName (${_formatDuration(_recordingDuration)})')),
         );
 
       } catch (e) {
@@ -754,30 +1689,33 @@ class _VideoPageState extends State<VideoPage> {
       }
 
     } else if (_hasRecorded) {
-      // This is the "Retake" action - delete old file and start fresh
       await _deleteOldFile();
       
       _csvData.clear();
       _csvData.writeln('timestamp,landmark_type,x,y,z,likelihood');
       setState(() {
         _isRecording = true;
-        _hasRecorded = false; // Reset the recording state
-        _lastSavedFilePath = null; // Clear the old file path
+        _hasRecorded = false;
+        _lastSavedFilePath = null;
+        _recordingDuration = Duration.zero; 
         _poseInfo = 'Recording...';
       });
+      
+      _startTimer();
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Previous recording deleted. Starting new recording...')),
       );
 
     } else {
-      // This is the initial "Start Recording" action
       _csvData.clear();
       _csvData.writeln('timestamp,landmark_type,x,y,z,likelihood');
       setState(() {
         _isRecording = true;
         _poseInfo = 'Recording...';
       });
+      
+      _startTimer(); 
     }
   }
 
@@ -813,6 +1751,7 @@ class _VideoPageState extends State<VideoPage> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     SizedBox(height: 20),
+                    
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -844,7 +1783,6 @@ class _VideoPageState extends State<VideoPage> {
                       ],
                     ),
                     
-                    // Add a "Next" button that only shows after recording is complete
                     if (_hasRecorded && !_isRecording) ...[
                       SizedBox(height: 10),
                       ElevatedButton(
@@ -865,6 +1803,46 @@ class _VideoPageState extends State<VideoPage> {
                       child: Stack(
                         children: [
                           CameraPreview(_controller!),
+                          
+                          if (_isRecording) 
+                            Positioned(
+                              top: 16,
+                              left: 0,
+                              right: 0,
+                              child: Center(
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.7),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        width: 8,
+                                        height: 8,
+                                        decoration: BoxDecoration(
+                                          color: Colors.red,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        _formatDuration(_recordingDuration),
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          fontFamily: 'monospace',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          
                           if (_controller!.value.previewSize != null)
                             CustomPaint(
                               painter: PosePainter(
@@ -884,7 +1862,6 @@ class _VideoPageState extends State<VideoPage> {
     );
   }
 }
-
 
 double translateX(
     double x, InputImageRotation rotation, Size size, Size absoluteImageSize) {
@@ -965,7 +1942,6 @@ class PosePainter extends CustomPainter {
             paintType);
       }
 
-      //Draw arms
       paintLine(
           PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow, leftPaint);
       paintLine(
@@ -975,13 +1951,11 @@ class PosePainter extends CustomPainter {
       paintLine(
           PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist, rightPaint);
 
-      //Draw Body
       paintLine(
           PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip, leftPaint);
       paintLine(PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip,
           rightPaint);
 
-      //Draw legs
       paintLine(
           PoseLandmarkType.leftHip, PoseLandmarkType.leftAnkle, leftPaint);
       paintLine(
@@ -1003,7 +1977,6 @@ class SensorPageWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Placeholder for your sensor page
     return Scaffold(
       appBar: AppBar(
         title: Text('Sensor Page (Placeholder)'),
