@@ -37,3 +37,8 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    implementation("org.pytorch:pytorch_android:1.13.1")
+    implementation("org.pytorch:pytorch_android_torchvision:1.13.1")
+}

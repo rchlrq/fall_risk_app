@@ -1,7 +1,3 @@
-// to-do: change demographics csv to this specific header: part_id, age, sex, height, weight, BMI 
-// to-do: figure out how to input data into the model (might make up sensor data for now) 
-// research: how to simultaneously receive sensor data and video data in the app
-
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -18,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+
 
 void main() {
   runApp(MaterialApp(
@@ -249,13 +246,14 @@ Future<void> _saveDemographicsCSV() async {
   try {
     final weight = double.parse(_formData['Weight'] ?? '0');
     final height = double.parse(_formData['Height'] ?? '0');
-    final bmi = height > 0 ? weight / (height * height) : 0.0;
+    // Updated BMI calculation for kg and meters: BMI = weight(kg) / height(m)²
+    final bmi = height > 0 ? (weight / (height * height)) : 0.0;
     
     final sexBinary = sex == 'Male' ? 1 : 0;
     
     final StringBuffer demographicsCSV = StringBuffer();
-    demographicsCSV.writeln('part_id,age,sex,height,weight,BMI');
-    demographicsCSV.writeln('${widget.userName},${_formData['Age']},$sexBinary,${_formData['Height']},${_formData['Weight']},${bmi.toStringAsFixed(2)}');
+    demographicsCSV.writeln('Name,Age,Height_meters,Weight_kg,Sex_binary,BMI');
+    demographicsCSV.writeln('${widget.userName},${_formData['Age']},${_formData['Height']},${_formData['Weight']},$sexBinary,${bmi.toStringAsFixed(2)}');
     
     final directory = await getApplicationDocumentsDirectory();
     final fileName = '${widget.userName}_demographics.csv';
@@ -288,17 +286,16 @@ Future<void> _shareCSVFile() async {
       final data = prefs.getString(key);
       final saved = data != null ? jsonDecode(data) : {};
 
-      // Add cleaned data file first (most important)
-      final cleanedDataPath = saved['CleanedDataPath'] as String?;
-      if (cleanedDataPath != null && File(cleanedDataPath).existsSync()) {
-        filesToShare.add(XFile(cleanedDataPath));
-        fileNames.add(path.basename(cleanedDataPath));
-      }
-
       final demographicsPath = saved['DemographicsPath'] as String?;
       if (demographicsPath != null && File(demographicsPath).existsSync()) {
         filesToShare.add(XFile(demographicsPath));
         fileNames.add(path.basename(demographicsPath));
+      }
+
+      final fallRiskPath = saved['FallRiskPath'] as String?;
+      if (fallRiskPath != null && File(fallRiskPath).existsSync()) {
+        filesToShare.add(XFile(fallRiskPath));
+        fileNames.add(path.basename(fallRiskPath));
       }
 
       final poseDataPath = saved['PoseDataPath'] as String?;
@@ -334,7 +331,7 @@ Future<void> _shareCSVFile() async {
       if (filesToShare.isNotEmpty) {
         await Share.shareXFiles(
           filesToShare,
-          text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}\n\nThe cleaned_data.csv file contains processed statistics from all measurements.',
+          text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
           subject: 'Fall Risk Assessment - Complete Data Package',
         );
         
@@ -377,39 +374,6 @@ Future<void> _shareCSVFile() async {
                 SizedBox(
                   width: 200,
                   child: TextFormField(
-                    decoration: InputDecoration(labelText: 'Shoe Size (US)'),
-                    keyboardType: TextInputType.number,
-                    onSaved: (val) => _formData['ShoeSize'] = val ?? '',
-                    validator: (val) {
-                      if (val == null || val.isEmpty) return 'Required';
-                      final parsed = int.tryParse(val);
-                      if (parsed == null) return 'Must be an integer';
-                      if (parsed <= 0) return 'Must be positive';
-                      if (parsed > 20) return 'Must be a realistic shoe size';
-                      return null;
-                    },
-                  ),
-                ),
-                SizedBox(height: 16),
-                SizedBox(
-                  width: 200,
-                  child: TextFormField(
-                    decoration: InputDecoration(labelText: 'Age (in years)'),
-                    keyboardType: TextInputType.number,
-                    onSaved: (val) => _formData['Age'] = val ?? '',
-                    validator: (val) {
-                      if (val == null || val.isEmpty) return 'Required';
-                      final parsed = int.tryParse(val);
-                      if (parsed == null) return 'Must be an integer';
-                      if (parsed <= 0) return 'Must be positive';
-                      return null;
-                    },
-                  ),
-                ),
-                SizedBox(height: 16),
-                SizedBox(
-                  width: 200,
-                  child: TextFormField(
                     decoration: InputDecoration(labelText: 'Height (in meters)'),
                     keyboardType: TextInputType.numberWithOptions(decimal: true),
                     onSaved: (val) => _formData['Height'] = val ?? '',
@@ -428,14 +392,30 @@ Future<void> _shareCSVFile() async {
                   width: 200,
                   child: TextFormField(
                     decoration: InputDecoration(labelText: 'Weight (in kg)'),
-                    keyboardType: TextInputType.number,
+                    keyboardType: TextInputType.numberWithOptions(decimal: true),
                     onSaved: (val) => _formData['Weight'] = val ?? '',
+                    validator: (val) {
+                      if (val == null || val.isEmpty) return 'Required';
+                      final parsed = double.tryParse(val);
+                      if (parsed == null) return 'Must be a number';
+                      if (parsed <= 0) return 'Must be positive';
+                      if (parsed > 500) return 'Must be a realistic weight in kg';
+                      return null;
+                    },
+                  ),
+                ),
+                SizedBox(height: 16),
+                SizedBox(
+                  width: 200,
+                  child: TextFormField(
+                    decoration: InputDecoration(labelText: 'Age (in years)'),
+                    keyboardType: TextInputType.number,
+                    onSaved: (val) => _formData['Age'] = val ?? '',
                     validator: (val) {
                       if (val == null || val.isEmpty) return 'Required';
                       final parsed = int.tryParse(val);
                       if (parsed == null) return 'Must be an integer';
                       if (parsed <= 0) return 'Must be positive';
-                      if (parsed > 500) return 'Must be a realistic weight';
                       return null;
                     },
                   ),
@@ -531,12 +511,45 @@ class _FallRiskPageState extends State<FallRiskPage> {
 
     await prefs.setString(key, jsonEncode(saved));
 
+    await _saveFallRiskCSV();
+
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
         builder: (_) => VideoPageWrapper(userName: widget.userName),
       ),
     );
+  }
+
+  Future<void> _saveFallRiskCSV() async {
+    try {
+      final StringBuffer fallRiskCSV = StringBuffer();
+      fallRiskCSV.writeln('Question_Number,Question,Answer_Yes_1_No_0');
+      
+      for (int i = 0; i < questions.length; i++) {
+        final answer = answers[i] == true ? 1 : 0;
+        fallRiskCSV.writeln('${i + 1},"${questions[i]}",$answer');
+      }
+      
+      final directory = await getApplicationDocumentsDirectory();
+      final fileName = '${widget.userName}_fall_risk_questionnaire.csv';
+      final filePath = path.join(directory.path, fileName);
+      final file = File(filePath);
+      
+      await file.writeAsString(fallRiskCSV.toString());
+      
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final existingData = prefs.getString(key);
+      final saved = existingData != null ? jsonDecode(existingData) : {};
+      saved['FallRiskPath'] = filePath;
+      await prefs.setString(key, jsonEncode(saved));
+      
+      print('Fall Risk CSV saved to: $filePath');
+      
+    } catch (e) {
+      print('Error saving Fall Risk CSV: $e');
+    }
   }
 
   Widget _buildQuestionRow(int index) {
@@ -998,9 +1011,12 @@ class _VideoPageState extends State<VideoPage> {
       setState(() {
         _poseInfo = 'Error processing pose data: $e';
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error processing pose data: $e')),
+      );
     }
   }
-
+  
   Future<void> _calculateArmSeparation(String restructuredFilePath) async {
     try {
       setState(() {
@@ -1560,194 +1576,6 @@ class _VideoPageState extends State<VideoPage> {
     }
   }
 
-  Future<void> _cleanAndCombineData() async {
-    try {
-      setState(() {
-        _poseInfo = 'Cleaning and combining data...';
-      });
-
-      final prefs = await SharedPreferences.getInstance();
-      final key = '${widget.userName}:data';
-      final data = prefs.getString(key);
-      final saved = data != null ? jsonDecode(data) : {};
-
-      // Read all CSV files
-      final demographicsPath = saved['DemographicsPath'] as String?;
-      final armSeparationPath = saved['ArmSeparationPath'] as String?;
-      final handSeparationPath = saved['HandSeparationPath'] as String?;
-      final trunkSwingPath = saved['TrunkSwingPath'] as String?;
-      final heelSeparationPath = saved['HeelSeparationPath'] as String?;
-
-      if (demographicsPath == null || !File(demographicsPath).existsSync() ||
-          armSeparationPath == null || !File(armSeparationPath).existsSync() ||
-          handSeparationPath == null || !File(handSeparationPath).existsSync() ||
-          trunkSwingPath == null || !File(trunkSwingPath).existsSync() ||
-          heelSeparationPath == null || !File(heelSeparationPath).existsSync()) {
-        throw Exception('One or more required CSV files not found');
-      }
-
-      // Read demographics data
-      final demographicsContent = await File(demographicsPath).readAsString();
-      final demographicsLines = demographicsContent.split('\n');
-      Map<String, String> demographics = {};
-      if (demographicsLines.length >= 2) {
-        final headers = demographicsLines[0].split(',');
-        final values = demographicsLines[1].split(',');
-        for (int i = 0; i < headers.length && i < values.length; i++) {
-          demographics[headers[i]] = values[i];
-        }
-      }
-
-      // Read time series data
-      final armSeparationContent = await File(armSeparationPath).readAsString();
-      final handSeparationContent = await File(handSeparationPath).readAsString();
-      final trunkSwingContent = await File(trunkSwingPath).readAsString();
-      final heelSeparationContent = await File(heelSeparationPath).readAsString();
-
-      final armSeparationLines = armSeparationContent.split('\n').where((line) => line.trim().isNotEmpty).skip(1).toList();
-      final handSeparationLines = handSeparationContent.split('\n').where((line) => line.trim().isNotEmpty).skip(1).toList();
-      final trunkSwingLines = trunkSwingContent.split('\n').where((line) => line.trim().isNotEmpty).skip(1).toList();
-      final heelSeparationLines = heelSeparationContent.split('\n').where((line) => line.trim().isNotEmpty).skip(1).toList();
-
-      // Find minimum length to ensure all data aligns
-      final minLength = [
-        armSeparationLines.length,
-        handSeparationLines.length,
-        trunkSwingLines.length,
-        heelSeparationLines.length
-      ].reduce((a, b) => a < b ? a : b);
-
-      // Parse data into lists
-      List<Map<String, double>> timeSeriesData = [];
-      for (int i = 0; i < minLength; i++) {
-        final armSeparationParts = armSeparationLines[i].split(',');
-        final handSeparationParts = handSeparationLines[i].split(',');
-        final trunkSwingParts = trunkSwingLines[i].split(',');
-        final heelSeparationParts = heelSeparationLines[i].split(',');
-
-        timeSeriesData.add({
-          'separation_left': double.tryParse(armSeparationParts[0]) ?? 0.0,
-          'separation_right': double.tryParse(armSeparationParts[1]) ?? 0.0,
-          'hand_separation_left': double.tryParse(handSeparationParts[0]) ?? 0.0,
-          'hand_separation_right': double.tryParse(handSeparationParts[1]) ?? 0.0,
-          'trunk_swing': double.tryParse(trunkSwingParts[0]) ?? 0.0,
-          'heel_separation_left': double.tryParse(heelSeparationParts[0]) ?? 0.0,
-          'heel_separation_right': double.tryParse(heelSeparationParts[1]) ?? 0.0,
-        });
-      }
-
-      // Calculate statistics for specific metrics needed for comprehensive output
-      final Map<String, List<double>> metricValues = {
-        'step_width': [], // Using heel separation as step width
-        'trunk_swing': [],
-        'arm_separation_left': [],
-        'arm_separation_right': [],
-        'hand_separation': [], // Combined hand separation
-      };
-
-      // Populate metric values
-      for (final row in timeSeriesData) {
-        // Step width calculated as average of heel separations
-        final stepWidth = (row['heel_separation_left']! + row['heel_separation_right']!) / 2;
-        metricValues['step_width']!.add(stepWidth);
-        
-        metricValues['trunk_swing']!.add(row['trunk_swing']!);
-        metricValues['arm_separation_left']!.add(row['separation_left']!);
-        metricValues['arm_separation_right']!.add(row['separation_right']!);
-        
-        // Hand separation as average of left and right
-        final handSeparation = (row['hand_separation_left']! + row['hand_separation_right']!) / 2;
-        metricValues['hand_separation']!.add(handSeparation);
-      }
-
-      // Calculate mean and std for each metric
-      Map<String, Map<String, double>> statistics = {};
-      for (String metric in metricValues.keys) {
-        final values = metricValues[metric]!.where((v) => v.isFinite).toList();
-        
-        if (values.isNotEmpty) {
-          final mean = values.reduce((a, b) => a + b) / values.length;
-          final variance = values.map((v) => math.pow(v - mean, 2)).reduce((a, b) => a + b) / values.length;
-          final std = math.sqrt(variance);
-
-          statistics[metric] = {
-            'mean': mean,
-            'std': std,
-          };
-        } else {
-          statistics[metric] = {
-            'mean': 0.0,
-            'std': 0.0,
-          };
-        }
-      }
-
-      // Create comprehensive cleaned CSV with demographics and pose analysis
-      final StringBuffer cleanedCsv = StringBuffer();
-      
-      // Headers combining demographics and pose analysis statistics
-      cleanedCsv.writeln('name,age,sex,height,weight,BMI,Step Width mean,Step Width std,Trunk Swing mean,Trunk Swing std,Arm Separation Left mean,Arm Separation Right mean,Arm Separation Left std,Arm Separation Right std,Hand Separation mean,x-mean');
-      
-      // Calculate x-mean (overall mean of all pose metrics)
-      final allValues = <double>[];
-      for (final metricList in metricValues.values) {
-        allValues.addAll(metricList.where((v) => v.isFinite));
-      }
-      final xMean = allValues.isNotEmpty ? allValues.reduce((a, b) => a + b) / allValues.length : 0.0;
-
-      // Data row with demographics and calculated statistics
-      final List<String> dataRow = [
-        widget.userName, // name instead of part_id
-        demographics['age'] ?? '0',
-        demographics['sex'] ?? '0',
-        demographics['height'] ?? '0.0',
-        demographics['weight'] ?? '0',
-        demographics['BMI'] ?? '0.0',
-        statistics['step_width']!['mean']!.toStringAsFixed(4),
-        statistics['step_width']!['std']!.toStringAsFixed(4),
-        statistics['trunk_swing']!['mean']!.toStringAsFixed(4),
-        statistics['trunk_swing']!['std']!.toStringAsFixed(4),
-        statistics['arm_separation_left']!['mean']!.toStringAsFixed(4),
-        statistics['arm_separation_right']!['mean']!.toStringAsFixed(4),
-        statistics['arm_separation_left']!['std']!.toStringAsFixed(4),
-        statistics['arm_separation_right']!['std']!.toStringAsFixed(4),
-        statistics['hand_separation']!['mean']!.toStringAsFixed(4),
-        xMean.toStringAsFixed(4),
-      ];
-      
-      cleanedCsv.writeln(dataRow.join(','));
-
-      // Save cleaned CSV
-      final directory = await getApplicationDocumentsDirectory();
-      final cleanedFileName = '${widget.userName}_cleaned_data.csv';
-      final cleanedFilePath = path.join(directory.path, cleanedFileName);
-      final cleanedFile = File(cleanedFilePath);
-      
-      await cleanedFile.writeAsString(cleanedCsv.toString());
-
-      // Store cleaned data path
-      saved['CleanedDataPath'] = cleanedFilePath;
-      await prefs.setString(key, jsonEncode(saved));
-
-      setState(() {
-        _poseInfo = 'Data cleaned and combined successfully!';
-      });
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cleaned data saved: $cleanedFileName')),
-      );
-      
-    } catch (e) {
-      print('Error cleaning and combining data: $e');
-      setState(() {
-        _poseInfo = 'Error cleaning data: $e';
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error cleaning data: $e')),
-      );
-    }
-  }
-
   Future<void> _shareCSVFile() async {
     try {
       List<XFile> filesToShare = [];
@@ -1758,17 +1586,16 @@ class _VideoPageState extends State<VideoPage> {
       final data = prefs.getString(key);
       final saved = data != null ? jsonDecode(data) : {};
 
-      // Add cleaned data file first (most important)
-      final cleanedDataPath = saved['CleanedDataPath'] as String?;
-      if (cleanedDataPath != null && File(cleanedDataPath).existsSync()) {
-        filesToShare.add(XFile(cleanedDataPath));
-        fileNames.add(path.basename(cleanedDataPath));
-      }
-
       final demographicsPath = saved['DemographicsPath'] as String?;
       if (demographicsPath != null && File(demographicsPath).existsSync()) {
         filesToShare.add(XFile(demographicsPath));
         fileNames.add(path.basename(demographicsPath));
+      }
+
+      final fallRiskPath = saved['FallRiskPath'] as String?;
+      if (fallRiskPath != null && File(fallRiskPath).existsSync()) {
+        filesToShare.add(XFile(fallRiskPath));
+        fileNames.add(path.basename(fallRiskPath));
       }
 
       final poseDataPath = saved['PoseDataPath'] as String?;
@@ -1804,7 +1631,7 @@ class _VideoPageState extends State<VideoPage> {
       if (filesToShare.isNotEmpty) {
         await Share.shareXFiles(
           filesToShare,
-          text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}\n\nThe cleaned_data.csv file contains processed statistics from all measurements.',
+          text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
           subject: 'Fall Risk Assessment - Complete Data Package',
         );
         
@@ -1872,7 +1699,6 @@ class _VideoPageState extends State<VideoPage> {
         await _calculateHandSeparation(_lastSavedFilePath!);
         await _calculateTrunkSwing(_lastSavedFilePath!);
         await _calculateHeelSeparation(_lastSavedFilePath!);
-        await _cleanAndCombineData();
 
 
         _csvData.clear();
@@ -1974,7 +1800,7 @@ class _VideoPageState extends State<VideoPage> {
                                 : _hasRecorded 
                                     ? Colors.orange 
                                     : Colors.green,
-                                                   ),
+                          ),
                         ),
                         SizedBox(width: 10),
                         ElevatedButton.icon(
