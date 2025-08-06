@@ -245,12 +245,13 @@ Future<void> _saveDemographicsCSV() async {
   try {
     final weight = double.parse(_formData['Weight'] ?? '0');
     final height = double.parse(_formData['Height'] ?? '0');
-    final bmi = height > 0 ? (weight / (height * height)) * 703 : 0.0;
+    // Correct BMI calculation for kg and meters: BMI = weight(kg) / height(m)²
+    final bmi = height > 0 ? (weight / (height * height)) : 0.0;
     
     final sexBinary = sex == 'Male' ? 1 : 0;
     
     final StringBuffer demographicsCSV = StringBuffer();
-    demographicsCSV.writeln('Name,Age,Height_inches,Weight_pounds,Sex_binary,BMI');
+    demographicsCSV.writeln('Name,Age,Height_meters,Weight_kg,Sex_binary,BMI');
     demographicsCSV.writeln('${widget.userName},${_formData['Age']},${_formData['Height']},${_formData['Weight']},$sexBinary,${bmi.toStringAsFixed(2)}');
     
     final directory = await getApplicationDocumentsDirectory();
@@ -274,7 +275,7 @@ Future<void> _saveDemographicsCSV() async {
   }
 }
 
-Future<void> _shareCSVFile() async {
+  Future<void> _shareCSVFile() async {
     try {
       List<XFile> filesToShare = [];
       List<String> fileNames = [];
@@ -320,11 +321,18 @@ Future<void> _shareCSVFile() async {
         fileNames.add(path.basename(heelSeparationPath));
       }
 
+      // Add cleansed CSV if available (this is the main output now)
+      final cleansedCsvPath = saved['CleansedCsvPath'] as String?;
+      if (cleansedCsvPath != null && File(cleansedCsvPath).existsSync()) {
+        filesToShare.add(XFile(cleansedCsvPath));
+        fileNames.add(path.basename(cleansedCsvPath));
+      }
+
       if (filesToShare.isNotEmpty) {
         await Share.shareXFiles(
           filesToShare,
           text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
-          subject: 'Fall Risk Assessment - Complete Data Package', // Updated subject
+          subject: 'Fall Risk Assessment - Complete Data Package',
         );
         
         ScaffoldMessenger.of(context).showSnackBar(
@@ -366,23 +374,6 @@ Future<void> _shareCSVFile() async {
                 SizedBox(
                   width: 200,
                   child: TextFormField(
-                    decoration: InputDecoration(labelText: 'Shoe Size (US)'),
-                    keyboardType: TextInputType.number,
-                    onSaved: (val) => _formData['ShoeSize'] = val ?? '',
-                    validator: (val) {
-                      if (val == null || val.isEmpty) return 'Required';
-                      final parsed = int.tryParse(val);
-                      if (parsed == null) return 'Must be an integer';
-                      if (parsed <= 0) return 'Must be positive';
-                      if (parsed > 20) return 'Must be a realistic shoe size';
-                      return null;
-                    },
-                  ),
-                ),
-                SizedBox(height: 16),
-                SizedBox(
-                  width: 200,
-                  child: TextFormField(
                     decoration: InputDecoration(labelText: 'Age (in years)'),
                     keyboardType: TextInputType.number,
                     onSaved: (val) => _formData['Age'] = val ?? '',
@@ -399,13 +390,13 @@ Future<void> _shareCSVFile() async {
                 SizedBox(
                   width: 200,
                   child: TextFormField(
-                    decoration: InputDecoration(labelText: 'Height (in inches)'),
+                    decoration: InputDecoration(labelText: 'Height (in meters)'),
                     keyboardType: TextInputType.number,
                     onSaved: (val) => _formData['Height'] = val ?? '',
                     validator: (val) {
                       if (val == null || val.isEmpty) return 'Required';
-                      final parsed = int.tryParse(val);
-                      if (parsed == null) return 'Must be an integer';
+                      final parsed = double.tryParse(val);
+                      if (parsed == null) return 'Must be a number';
                       if (parsed <= 0) return 'Must be positive';
                       return null;
                     },
@@ -415,7 +406,7 @@ Future<void> _shareCSVFile() async {
                 SizedBox(
                   width: 200,
                   child: TextFormField(
-                    decoration: InputDecoration(labelText: 'Weight (in pounds)'),
+                    decoration: InputDecoration(labelText: 'Weight (in kg)'),
                     keyboardType: TextInputType.number,
                     onSaved: (val) => _formData['Weight'] = val ?? '',
                     validator: (val) {
@@ -656,6 +647,7 @@ class _VideoPageState extends State<VideoPage> {
   bool _hasRecorded = false;
   final StringBuffer _csvData = StringBuffer();
   String? _lastSavedFilePath;
+  String? _cleansedCsvPath; // Add a variable to store cleansed CSV path
   
   DateTime? _recordingStartTime;
   Duration _recordingDuration = Duration.zero;
@@ -1003,10 +995,10 @@ class _VideoPageState extends State<VideoPage> {
       }
 
       final csvContent = await file.readAsString();
-      final lines = csvContent.split('\n');
+      final lines = csvContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
       
-      if (lines.isEmpty) {
-        throw Exception('CSV file is empty');
+      if (lines.length < 2) {
+        throw Exception('Not enough data to calculate arm separation');
       }
 
       final headers = lines[0].split(',');
@@ -1149,10 +1141,10 @@ class _VideoPageState extends State<VideoPage> {
       }
 
       final csvContent = await file.readAsString();
-      final lines = csvContent.split('\n');
+      final lines = csvContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
       
-      if (lines.isEmpty) {
-        throw Exception('CSV file is empty');
+      if (lines.length < 2) {
+        throw Exception('Not enough data to calculate hand separation');
       }
 
       final headers = lines[0].split(',');
@@ -1294,10 +1286,10 @@ class _VideoPageState extends State<VideoPage> {
       }
 
       final csvContent = await file.readAsString();
-      final lines = csvContent.split('\n');
+      final lines = csvContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
       
-      if (lines.isEmpty) {
-        throw Exception('CSV file is empty');
+      if (lines.length < 2) {
+        throw Exception('Not enough data to calculate trunk swing');
       }
 
       final headers = lines[0].split(',');
@@ -1417,10 +1409,10 @@ class _VideoPageState extends State<VideoPage> {
       }
 
       final csvContent = await file.readAsString();
-      final lines = csvContent.split('\n');
+      final lines = csvContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
       
-      if (lines.isEmpty) {
-        throw Exception('CSV file is empty');
+      if (lines.length < 2) {
+        throw Exception('Not enough data to calculate heel separation');
       }
 
       final headers = lines[0].split(',');
@@ -1550,73 +1542,170 @@ class _VideoPageState extends State<VideoPage> {
     }
   }
 
-  Future<void> _shareCSVFile() async {
+  Future<void> _runDataCleansingScript() async {
     try {
-      List<XFile> filesToShare = [];
-      List<String> fileNames = [];
-
       final prefs = await SharedPreferences.getInstance();
       final key = '${widget.userName}:data';
       final data = prefs.getString(key);
       final saved = data != null ? jsonDecode(data) : {};
 
       final demographicsPath = saved['DemographicsPath'] as String?;
-      if (demographicsPath != null && File(demographicsPath).existsSync()) {
-        filesToShare.add(XFile(demographicsPath));
-        fileNames.add(path.basename(demographicsPath));
-      }
-
-      final poseDataPath = saved['PoseDataPath'] as String?;
-      if (poseDataPath != null && File(poseDataPath).existsSync()) {
-        filesToShare.add(XFile(poseDataPath));
-        fileNames.add(path.basename(poseDataPath));
-      }
-
       final armSeparationPath = saved['ArmSeparationPath'] as String?;
-      if (armSeparationPath != null && File(armSeparationPath).existsSync()) {
-        filesToShare.add(XFile(armSeparationPath));
-        fileNames.add(path.basename(armSeparationPath));
-      }
-
       final handSeparationPath = saved['HandSeparationPath'] as String?;
-      if (handSeparationPath != null && File(handSeparationPath).existsSync()) {
-        filesToShare.add(XFile(handSeparationPath));
-        fileNames.add(path.basename(handSeparationPath));
-      }
-
       final trunkSwingPath = saved['TrunkSwingPath'] as String?;
-      if (trunkSwingPath != null && File(trunkSwingPath).existsSync()) {
-        filesToShare.add(XFile(trunkSwingPath));
-        fileNames.add(path.basename(trunkSwingPath));
-      }
-
       final heelSeparationPath = saved['HeelSeparationPath'] as String?;
-      if (heelSeparationPath != null && File(heelSeparationPath).existsSync()) {
-        filesToShare.add(XFile(heelSeparationPath));
-        fileNames.add(path.basename(heelSeparationPath));
+
+      // Only proceed if all 5 files exist (demographics + 4 gait metrics)
+      if ([demographicsPath, armSeparationPath, handSeparationPath, trunkSwingPath, heelSeparationPath].any((p) => p == null || !File(p!).existsSync())) {
+        setState(() {
+          _poseInfo = 'Not all CSV files are available for cleansing.';
+        });
+        return;
       }
 
-      if (filesToShare.isNotEmpty) {
-        await Share.shareXFiles(
-          filesToShare,
-          text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
-          subject: 'Fall Risk Assessment - Pose Data & Analysis',
-        );
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sharing ${filesToShare.length} CSV file(s): ${fileNames.join(', ')}')),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No CSV files to share. Please record some data first.')),
-        );
+      setState(() {
+        _poseInfo = 'Processing and cleansing data...';
+      });
+
+      // Process demographics data
+      final demographicsFile = File(demographicsPath!);
+      final demographicsContent = await demographicsFile.readAsString();
+      final demographicsLines = demographicsContent.split('\n');
+      final demographicsHeaders = demographicsLines[0].split(',');
+      final demographicsValues = demographicsLines[1].split(',');
+      
+      Map<String, dynamic> demographicsData = {};
+      for (int i = 0; i < demographicsHeaders.length && i < demographicsValues.length; i++) {
+        demographicsData[demographicsHeaders[i].trim()] = demographicsValues[i].trim();
       }
-    } catch (e) {
-      print('Error sharing files: $e');
+
+      // Process trunk swing data
+      final trunkSwingFile = File(trunkSwingPath!);
+      final trunkSwingContent = await trunkSwingFile.readAsString();
+      final trunkSwingLines = trunkSwingContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
+      List<double> trunkSwingValues = [];
+      for (int i = 1; i < trunkSwingLines.length; i++) {
+        final value = double.tryParse(trunkSwingLines[i].trim());
+        if (value != null) trunkSwingValues.add(value);
+      }
+      final trunkSwingMean = trunkSwingValues.isNotEmpty ? trunkSwingValues.reduce((a, b) => a + b) / trunkSwingValues.length : 0.0;
+      final trunkSwingStd = trunkSwingValues.isNotEmpty ? _calculateStandardDeviation(trunkSwingValues) : 0.0;
+
+      // Process heel separation data (Step Width)
+      final heelSeparationFile = File(heelSeparationPath!);
+      final heelSeparationContent = await heelSeparationFile.readAsString();
+      final heelSeparationLines = heelSeparationContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
+      List<double> stepWidthValues = [];
+      for (int i = 1; i < heelSeparationLines.length; i++) {
+        final parts = heelSeparationLines[i].split(',');
+        if (parts.length >= 2) {
+          final leftValue = double.tryParse(parts[0].trim());
+          final rightValue = double.tryParse(parts[1].trim());
+          if (leftValue != null && rightValue != null) {
+            // Calculate step width as the average of left and right heel separation
+            stepWidthValues.add((leftValue + rightValue) / 2.0);
+          }
+        }
+      }
+      final stepWidthMean = stepWidthValues.isNotEmpty ? stepWidthValues.reduce((a, b) => a + b) / stepWidthValues.length : 0.0;
+      final stepWidthStd = stepWidthValues.isNotEmpty ? _calculateStandardDeviation(stepWidthValues) : 0.0;
+
+      // Process arm separation data
+      final armSeparationFile = File(armSeparationPath!);
+      final armSeparationContent = await armSeparationFile.readAsString();
+      final armSeparationLines = armSeparationContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
+      List<double> armLeftValues = [];
+      List<double> armRightValues = [];
+      for (int i = 1; i < armSeparationLines.length; i++) {
+        final parts = armSeparationLines[i].split(',');
+        if (parts.length >= 2) {
+          final leftValue = double.tryParse(parts[0].trim());
+          final rightValue = double.tryParse(parts[1].trim());
+          if (leftValue != null) armLeftValues.add(leftValue);
+          if (rightValue != null) armRightValues.add(rightValue);
+        }
+      }
+      final armLeftMean = armLeftValues.isNotEmpty ? armLeftValues.reduce((a, b) => a + b) / armLeftValues.length : 0.0;
+      final armLeftStd = armLeftValues.isNotEmpty ? _calculateStandardDeviation(armLeftValues) : 0.0;
+      final armRightMean = armRightValues.isNotEmpty ? armRightValues.reduce((a, b) => a + b) / armRightValues.length : 0.0;
+      final armRightStd = armRightValues.isNotEmpty ? _calculateStandardDeviation(armRightValues) : 0.0;
+
+      // Process hand separation data
+      final handSeparationFile = File(handSeparationPath!);
+      final handSeparationContent = await handSeparationFile.readAsString();
+      final handSeparationLines = handSeparationContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
+      List<double> handValues = [];
+      for (int i = 1; i < handSeparationLines.length; i++) {
+        final parts = handSeparationLines[i].split(',');
+        if (parts.length >= 2) {
+          final leftValue = double.tryParse(parts[0].trim());
+          final rightValue = double.tryParse(parts[1].trim());
+          if (leftValue != null && rightValue != null) {
+            // Calculate hand separation as the average of left and right
+            handValues.add((leftValue + rightValue) / 2.0);
+          }
+        }
+      }
+      final handSeparationMean = handValues.isNotEmpty ? handValues.reduce((a, b) => a + b) / handValues.length : 0.0;
+
+      // Create cleansed data with specified format
+      final StringBuffer cleansedCsv = StringBuffer();
+      cleansedCsv.writeln('Part_id,age,sex,height,weight,BMI,Step Width mean,Step Width std,Trunk Swing mean,Trunk Swing std,Arm Separation Left mean,Arm Separation Right mean,Arm Separation Left std,Arm Separation Right std,Hand Separation mean');
+      
+      // Convert sex to text format (1 = M, 0 = F)
+      final sexText = demographicsData['Sex_binary'] == '1' ? 'M' : 'F';
+      
+      cleansedCsv.write('${demographicsData['Name']},');
+      cleansedCsv.write('${demographicsData['Age']},');
+      cleansedCsv.write('$sexText,');
+      cleansedCsv.write('${demographicsData['Height_meters']},');
+      cleansedCsv.write('${demographicsData['Weight_kg']},');
+      cleansedCsv.write('${demographicsData['BMI']},');
+      cleansedCsv.write('${stepWidthMean.toStringAsFixed(2)},');
+      cleansedCsv.write('${stepWidthStd.toStringAsFixed(2)},');
+      cleansedCsv.write('${trunkSwingMean.toStringAsFixed(2)},');
+      cleansedCsv.write('${trunkSwingStd.toStringAsFixed(2)},');
+      cleansedCsv.write('${armLeftMean.toStringAsFixed(2)},');
+      cleansedCsv.write('${armRightMean.toStringAsFixed(2)},');
+      cleansedCsv.write('${armLeftStd.toStringAsFixed(2)},');
+      cleansedCsv.write('${armRightStd.toStringAsFixed(2)},');
+      cleansedCsv.writeln('${handSeparationMean.toStringAsFixed(2)}');
+
+      // Save cleansed data
+      final directory = await getApplicationDocumentsDirectory();
+      final cleansedFileName = '${widget.userName}_cleansed.csv';
+      final cleansedFilePath = path.join(directory.path, cleansedFileName);
+      final cleansedFile = File(cleansedFilePath);
+      await cleansedFile.writeAsString(cleansedCsv.toString());
+
+      setState(() {
+        _cleansedCsvPath = cleansedFilePath;
+        _poseInfo = 'Cleansed CSV generated successfully!';
+      });
+
+      // Save cleansed path to SharedPreferences
+      saved['CleansedCsvPath'] = cleansedFilePath;
+      await prefs.setString(key, jsonEncode(saved));
+      
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error sharing files: $e')),
+        SnackBar(content: Text('Data cleansing completed: $cleansedFileName')),
       );
+
+    } catch (e) {
+      setState(() {
+        _poseInfo = 'Error running data cleansing: $e';
+      });
+      print('Error details: $e');
     }
+  }
+
+  double _calculateStandardDeviation(List<double> values) {
+    if (values.isEmpty) return 0.0;
+    
+    final mean = values.reduce((a, b) => a + b) / values.length;
+    final squaredDifferences = values.map((value) => math.pow(value - mean, 2));
+    final variance = squaredDifferences.reduce((a, b) => a + b) / values.length;
+    return math.sqrt(variance);
   }
 
 
@@ -1668,6 +1757,8 @@ class _VideoPageState extends State<VideoPage> {
         await _calculateTrunkSwing(_lastSavedFilePath!);
         await _calculateHeelSeparation(_lastSavedFilePath!);
 
+        // Run data cleansing after all CSVs are generated
+        await _runDataCleansingScript();
 
         _csvData.clear();
         setState(() {
@@ -1718,6 +1809,83 @@ class _VideoPageState extends State<VideoPage> {
       _startTimer(); 
     }
   }
+
+  Future<void> _shareCSVFile() async {
+    try {
+      List<XFile> filesToShare = [];
+      List<String> fileNames = [];
+
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+
+      final demographicsPath = saved['DemographicsPath'] as String?;
+      if (demographicsPath != null && File(demographicsPath).existsSync()) {
+        filesToShare.add(XFile(demographicsPath));
+        fileNames.add(path.basename(demographicsPath));
+      }
+
+      final poseDataPath = saved['PoseDataPath'] as String?;
+      if (poseDataPath != null && File(poseDataPath).existsSync()) {
+        filesToShare.add(XFile(poseDataPath));
+        fileNames.add(path.basename(poseDataPath));
+      }
+
+      final armSeparationPath = saved['ArmSeparationPath'] as String?;
+      if (armSeparationPath != null && File(armSeparationPath).existsSync()) {
+        filesToShare.add(XFile(armSeparationPath));
+        fileNames.add(path.basename(armSeparationPath));
+      }
+
+      final handSeparationPath = saved['HandSeparationPath'] as String?;
+      if (handSeparationPath != null && File(handSeparationPath).existsSync()) {
+        filesToShare.add(XFile(handSeparationPath));
+        fileNames.add(path.basename(handSeparationPath));
+      }
+
+      final trunkSwingPath = saved['TrunkSwingPath'] as String?;
+      if (trunkSwingPath != null && File(trunkSwingPath).existsSync()) {
+        filesToShare.add(XFile(trunkSwingPath));
+        fileNames.add(path.basename(trunkSwingPath));
+      }
+
+      final heelSeparationPath = saved['HeelSeparationPath'] as String?;
+      if (heelSeparationPath != null && File(heelSeparationPath).existsSync()) {
+        filesToShare.add(XFile(heelSeparationPath));
+        fileNames.add(path.basename(heelSeparationPath));
+      }
+
+      // Add cleansed CSV if available (this is the main output now)
+      final cleansedCsvPath = saved['CleansedCsvPath'] as String?;
+      if (cleansedCsvPath != null && File(cleansedCsvPath).existsSync()) {
+        filesToShare.add(XFile(cleansedCsvPath));
+        fileNames.add(path.basename(cleansedCsvPath));
+      }
+
+      if (filesToShare.isNotEmpty) {
+        await Share.shareXFiles(
+          filesToShare,
+          text: 'Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
+          subject: 'Fall Risk Assessment - Complete Data Package',
+        );
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sharing ${filesToShare.length} CSV file(s): ${fileNames.join(', ')}')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No CSV files to share. Please record some data first.')),
+        );
+      }
+    } catch (e) {
+      print('Error sharing files: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error sharing files: $e')),
+      );
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1846,7 +2014,7 @@ class _VideoPageState extends State<VideoPage> {
                           if (_controller!.value.previewSize != null)
                             CustomPaint(
                               painter: PosePainter(
-                                _poses,
+                                                               _poses,
                                 _controller!.value.previewSize!,
                                 _rotation,
                               ),
@@ -1974,6 +2142,7 @@ class PosePainter extends CustomPainter {
 class SensorPageWrapper extends StatelessWidget {
   final String userName;
   SensorPageWrapper({required this.userName});
+
 
   @override
   Widget build(BuildContext context) {

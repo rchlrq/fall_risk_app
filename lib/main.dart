@@ -321,7 +321,6 @@ Future<void> _saveDemographicsCSV() async {
         fileNames.add(path.basename(heelSeparationPath));
       }
 
-      // Add cleansed CSV if available (this is the main output now)
       final cleansedCsvPath = saved['CleansedCsvPath'] as String?;
       if (cleansedCsvPath != null && File(cleansedCsvPath).existsSync()) {
         filesToShare.add(XFile(cleansedCsvPath));
@@ -671,7 +670,7 @@ class _VideoPageState extends State<VideoPage> {
   void _startTimer() {
     _recordingStartTime = DateTime.now();
     _timer = Timer.periodic(Duration(seconds: 1), (timer) {
-      if (_isRecording && _recordingStartTime != null) {
+      if (_isRecording && _recordingStartTime != null && mounted) {
         setState(() {
           _recordingDuration = DateTime.now().difference(_recordingStartTime!);
         });
@@ -709,26 +708,32 @@ class _VideoPageState extends State<VideoPage> {
       await _controller!.initialize();
       await _controller!.startImageStream(_processCameraImage);
 
-      setState(() {
-        _isCameraInitialized = true;
-      });
+      if (mounted) {
+        setState(() {
+          _isCameraInitialized = true;
+        });
+      }
     } catch (e) {
       print('Camera init error: $e');
-      setState(() {
-        _poseInfo = 'Failed to initialize camera: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Failed to initialize camera: $e';
+        });
+      }
     }
   }
 
   Future<void> _processCameraImage(CameraImage image) async {
-    if (_isDetecting || _controller == null) return;
+    if (_isDetecting || _controller == null || !mounted) return;
     _isDetecting = true;
 
     try {
       if (image.format.group != ImageFormatGroup.yuv420) {
-        setState(() {
-          _poseInfo = 'Camera image format not supported: ${image.format.group}';
-        });
+        if (mounted) {
+          setState(() {
+            _poseInfo = 'Camera image format not supported: ${image.format.group}';
+          });
+        }
         _isDetecting = false;
         return;
       }
@@ -773,50 +778,45 @@ class _VideoPageState extends State<VideoPage> {
         }
       }
 
-      setState(() {
-        _poses = poses;
-        _rotation = imageRotation;
-        if (poses.isNotEmpty) {
-          final pose = poses.first;
-          if (_isRecording) {
-            _poseInfo = 'Recording... ${pose.landmarks.length} landmarks detected';
+      if (mounted) {
+        setState(() {
+          _poses = poses;
+          _rotation = imageRotation;
+          if (poses.isNotEmpty) {
+            final pose = poses.first;
+            if (_isRecording) {
+              _poseInfo = 'Recording... ${pose.landmarks.length} landmarks detected';
+            } else {
+              _poseInfo = 'Detected ${pose.landmarks.length} landmarks';
+            }
           } else {
-            _poseInfo = 'Detected ${pose.landmarks.length} landmarks';
+            if (_isRecording) {
+              _poseInfo = 'Recording... No pose detected';
+            } else {
+              _poseInfo = 'No pose detected - Point camera at a person';
+            }
           }
-        } else {
-          if (_isRecording) {
-            _poseInfo = 'Recording... No pose detected';
-          } else {
-            _poseInfo = 'No pose detected - Point camera at a person';
-          }
-        }
-      });
+        });
+      }
     } catch (e) {
       print('Pose detection error: $e');
-      setState(() {
-        _poseInfo = 'Pose detection error: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Pose detection error: $e';
+        });
+      }
     } finally {
       _isDetecting = false;
     }
   }
 
-  Future<void> _deleteOldFile() async {
-    if (_lastSavedFilePath != null && File(_lastSavedFilePath!).existsSync()) {
-      try {
-        await File(_lastSavedFilePath!).delete();
-        print('Deleted old CSV file: $_lastSavedFilePath');
-      } catch (e) {
-        print('Error deleting old file: $e');
-      }
-    }
-  }
-  
   Future<void> _processPoseData(String csvFilePath) async {
     try {
-      setState(() {
-        _poseInfo = 'Processing pose data...';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Processing pose data...';
+        });
+      }
 
       final originalFile = File(csvFilePath);
       if (!originalFile.existsSync()) {
@@ -964,9 +964,11 @@ class _VideoPageState extends State<VideoPage> {
       saved['PoseDataPath'] = newFilePath;
       await prefs.setString(key, jsonEncode(saved));
       
-      setState(() {
-        _poseInfo = 'Pose data processed and restructured!';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Pose data processed and restructured!';
+        });
+      }
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Pose data restructured successfully: $newFileName')),
@@ -974,9 +976,11 @@ class _VideoPageState extends State<VideoPage> {
       
     } catch (e) {
       print('Error processing pose data: $e');
-      setState(() {
-        _poseInfo = 'Error processing pose data: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Error processing pose data: $e';
+        });
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error processing pose data: $e')),
       );
@@ -985,9 +989,11 @@ class _VideoPageState extends State<VideoPage> {
   
   Future<void> _calculateArmSeparation(String restructuredFilePath) async {
     try {
-      setState(() {
-        _poseInfo = 'Calculating arm separation...';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Calculating arm separation...';
+        });
+      }
 
       final file = File(restructuredFilePath);
       if (!file.existsSync()) {
@@ -1109,9 +1115,11 @@ class _VideoPageState extends State<VideoPage> {
       saved['ArmSeparationPath'] = armSeparationFilePath;
       await prefs.setString(key, jsonEncode(saved));
 
-      setState(() {
-        _poseInfo = 'Arm separation calculated successfully!';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Arm separation calculated successfully!';
+        });
+      }
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Arm separation data saved: $armSeparationFileName')),
@@ -1119,21 +1127,24 @@ class _VideoPageState extends State<VideoPage> {
       
     } catch (e) {
       print('Error calculating arm separation: $e');
-      setState(() {
-        _poseInfo = 'Error calculating arm separation: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Error calculating arm separation: $e';
+        });
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error calculating arm separation: $e')),
       );
     }
   }
 
-
   Future<void> _calculateHandSeparation(String restructuredFilePath) async {
     try {
-      setState(() {
-        _poseInfo = 'Calculating hand separation...';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Calculating hand separation...';
+        });
+      }
 
       final file = File(restructuredFilePath);
       if (!file.existsSync()) {
@@ -1255,9 +1266,11 @@ class _VideoPageState extends State<VideoPage> {
       saved['HandSeparationPath'] = handSeparationFilePath;
       await prefs.setString(key, jsonEncode(saved));
 
-      setState(() {
-        _poseInfo = 'Hand separation calculated successfully!';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Hand separation calculated successfully!';
+        });
+      }
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Hand separation data saved: $handSeparationFileName')),
@@ -1265,9 +1278,11 @@ class _VideoPageState extends State<VideoPage> {
       
     } catch (e) {
       print('Error calculating hand separation: $e');
-      setState(() {
-        _poseInfo = 'Error calculating hand separation: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Error calculating hand separation: $e';
+        });
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error calculating hand separation: $e')),
       );
@@ -1276,9 +1291,11 @@ class _VideoPageState extends State<VideoPage> {
 
   Future<void> _calculateTrunkSwing(String restructuredFilePath) async {
     try {
-      setState(() {
-        _poseInfo = 'Calculating trunk swing...';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Calculating trunk swing...';
+        });
+      }
 
       final file = File(restructuredFilePath);
       if (!file.existsSync()) {
@@ -1378,9 +1395,11 @@ class _VideoPageState extends State<VideoPage> {
       saved['TrunkSwingPath'] = trunkSwingFilePath;
       await prefs.setString(key, jsonEncode(saved));
 
-      setState(() {
-        _poseInfo = 'Trunk swing calculated successfully!';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Trunk swing calculated successfully!';
+        });
+      }
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Trunk swing data saved: $trunkSwingFileName')),
@@ -1388,9 +1407,11 @@ class _VideoPageState extends State<VideoPage> {
       
     } catch (e) {
       print('Error calculating trunk swing: $e');
-      setState(() {
-        _poseInfo = 'Error calculating trunk swing: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Error calculating trunk swing: $e';
+        });
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error calculating trunk swing: $e')),
       );
@@ -1399,9 +1420,11 @@ class _VideoPageState extends State<VideoPage> {
 
   Future<void> _calculateHeelSeparation(String restructuredFilePath) async {
     try {
-      setState(() {
-        _poseInfo = 'Calculating heel separation...';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Calculating heel separation...';
+        });
+      }
 
       final file = File(restructuredFilePath);
       if (!file.existsSync()) {
@@ -1523,9 +1546,11 @@ class _VideoPageState extends State<VideoPage> {
       saved['HeelSeparationPath'] = heelSeparationFilePath;
       await prefs.setString(key, jsonEncode(saved));
 
-      setState(() {
-        _poseInfo = 'Heel separation calculated successfully!';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Heel separation calculated successfully!';
+        });
+      }
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Heel separation data saved: $heelSeparationFileName')),
@@ -1533,9 +1558,11 @@ class _VideoPageState extends State<VideoPage> {
       
     } catch (e) {
       print('Error calculating heel separation: $e');
-      setState(() {
-        _poseInfo = 'Error calculating heel separation: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Error calculating heel separation: $e';
+        });
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error calculating heel separation: $e')),
       );
@@ -1557,15 +1584,19 @@ class _VideoPageState extends State<VideoPage> {
 
       // Only proceed if all 5 files exist (demographics + 4 gait metrics)
       if ([demographicsPath, armSeparationPath, handSeparationPath, trunkSwingPath, heelSeparationPath].any((p) => p == null || !File(p!).existsSync())) {
-        setState(() {
-          _poseInfo = 'Not all CSV files are available for cleansing.';
-        });
+        if (mounted) {
+          setState(() {
+            _poseInfo = 'Not all CSV files are available for cleansing.';
+          });
+        }
         return;
       }
 
-      setState(() {
-        _poseInfo = 'Processing and cleansing data...';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Processing and cleansing data...';
+        });
+      }
 
       // Process demographics data
       final demographicsFile = File(demographicsPath!);
@@ -1678,10 +1709,12 @@ class _VideoPageState extends State<VideoPage> {
       final cleansedFile = File(cleansedFilePath);
       await cleansedFile.writeAsString(cleansedCsv.toString());
 
-      setState(() {
-        _cleansedCsvPath = cleansedFilePath;
-        _poseInfo = 'Cleansed CSV generated successfully!';
-      });
+      if (mounted) {
+        setState(() {
+          _cleansedCsvPath = cleansedFilePath;
+          _poseInfo = 'Cleansed CSV generated successfully!';
+        });
+      }
 
       // Save cleansed path to SharedPreferences
       saved['CleansedCsvPath'] = cleansedFilePath;
@@ -1692,9 +1725,11 @@ class _VideoPageState extends State<VideoPage> {
       );
 
     } catch (e) {
-      setState(() {
-        _poseInfo = 'Error running data cleansing: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _poseInfo = 'Error running data cleansing: $e';
+        });
+      }
       print('Error details: $e');
     }
   }
@@ -1727,10 +1762,12 @@ class _VideoPageState extends State<VideoPage> {
     if (_isRecording) {
       _stopTimer(); 
       
-      setState(() {
-        _isRecording = false;
-        _poseInfo = 'Recording stopped. Saving data...';
-      });
+      if (mounted) {
+        setState(() {
+          _isRecording = false;
+          _poseInfo = 'Recording stopped. Saving data...';
+        });
+      }
 
       try {
         final directory = await getApplicationDocumentsDirectory();
@@ -1760,20 +1797,23 @@ class _VideoPageState extends State<VideoPage> {
         // Run data cleansing after all CSVs are generated
         await _runDataCleansingScript();
 
-        _csvData.clear();
-        setState(() {
-          _hasRecorded = true;
-          _poseInfo = 'Recording saved! Duration: ${_formatDuration(_recordingDuration)}';
-        });
+        if (mounted) {
+          setState(() {
+            _hasRecorded = true;
+            _poseInfo = 'Recording saved! Duration: ${_formatDuration(_recordingDuration)}';
+          });
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Pose data saved successfully: $fileName (${_formatDuration(_recordingDuration)})')),
         );
 
       } catch (e) {
         print('Error saving file: $e');
-        setState(() {
-          _poseInfo = 'Error saving file: $e';
-        });
+        if (mounted) {
+          setState(() {
+            _poseInfo = 'Error saving file: $e';
+          });
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error saving file: $e')),
         );
@@ -1784,13 +1824,15 @@ class _VideoPageState extends State<VideoPage> {
       
       _csvData.clear();
       _csvData.writeln('timestamp,landmark_type,x,y,z,likelihood');
-      setState(() {
-        _isRecording = true;
-        _hasRecorded = false;
-        _lastSavedFilePath = null;
-        _recordingDuration = Duration.zero; 
-        _poseInfo = 'Recording...';
-      });
+      if (mounted) {
+        setState(() {
+          _isRecording = true;
+          _hasRecorded = false;
+          _lastSavedFilePath = null;
+          _recordingDuration = Duration.zero; 
+          _poseInfo = 'Recording...';
+        });
+      }
       
       _startTimer();
       
@@ -1801,10 +1843,12 @@ class _VideoPageState extends State<VideoPage> {
     } else {
       _csvData.clear();
       _csvData.writeln('timestamp,landmark_type,x,y,z,likelihood');
-      setState(() {
-        _isRecording = true;
-        _poseInfo = 'Recording...';
-      });
+      if (mounted) {
+        setState(() {
+          _isRecording = true;
+          _poseInfo = 'Recording...';
+        });
+      }
       
       _startTimer(); 
     }
@@ -1856,7 +1900,6 @@ class _VideoPageState extends State<VideoPage> {
         fileNames.add(path.basename(heelSeparationPath));
       }
 
-      // Add cleansed CSV if available (this is the main output now)
       final cleansedCsvPath = saved['CleansedCsvPath'] as String?;
       if (cleansedCsvPath != null && File(cleansedCsvPath).existsSync()) {
         filesToShare.add(XFile(cleansedCsvPath));
@@ -1870,12 +1913,13 @@ class _VideoPageState extends State<VideoPage> {
           subject: 'Fall Risk Assessment - Complete Data Package',
         );
         
+        
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sharing ${filesToShare.length} CSV file(s): ${fileNames.join(', ')}')),
+          SnackBar(content: Text('Sharing ${filesToShare.length} file(s): ${fileNames.join(', ')}')),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No CSV files to share. Please record some data first.')),
+          SnackBar(content: Text('No files to share. Please complete the assessment first.')),
         );
       }
     } catch (e) {
@@ -1886,6 +1930,16 @@ class _VideoPageState extends State<VideoPage> {
     }
   }
 
+  Future<void> _deleteOldFile() async {
+    if (_lastSavedFilePath != null && File(_lastSavedFilePath!).existsSync()) {
+      try {
+        await File(_lastSavedFilePath!).delete();
+        print('Deleted old CSV file: $_lastSavedFilePath');
+      } catch (e) {
+        print('Error deleting old file: $e');
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2014,7 +2068,7 @@ class _VideoPageState extends State<VideoPage> {
                           if (_controller!.value.previewSize != null)
                             CustomPaint(
                               painter: PosePainter(
-                                                               _poses,
+                                _poses,
                                 _controller!.value.previewSize!,
                                 _rotation,
                               ),
@@ -2143,21 +2197,392 @@ class SensorPageWrapper extends StatelessWidget {
   final String userName;
   SensorPageWrapper({required this.userName});
 
+  @override
+  Widget build(BuildContext context) {
+    return SensorPage(
+      userName: userName,
+      onNext: () {
+        // Assessment completed, go back to user selection
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Fall risk assessment completed!')),
+        );
+        Navigator.pushReplacement(
+            context, MaterialPageRoute(builder: (_) => UserSelectionPage()));
+      },
+    );
+  }
+}
+
+class SensorPage extends StatefulWidget {
+  final String userName;
+  final VoidCallback onNext;
+
+  const SensorPage({required this.userName, required this.onNext});
+
+  @override
+  _SensorPageState createState() => _SensorPageState();
+}
+
+class _SensorPageState extends State<SensorPage> {
+  bool _isConnected = false;
+  String _connectionStatus = 'Not connected';
+  bool _isRecording = false;
+  final StringBuffer _sensorCsvData = StringBuffer();
+  Timer? _sensorTimer;
+  String? _lastSensorFilePath;
+  DateTime? _recordingStartTime;
+
+  @override
+  void dispose() {
+    _sensorTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _simulateConnection() async {
+    setState(() {
+      _connectionStatus = 'Connecting to simulated sensor...';
+    });
+
+    await Future.delayed(Duration(seconds: 2));
+
+    setState(() {
+      _isConnected = true;
+      _connectionStatus = 'Connected to Simulated IMU Sensor';
+    });
+
+    // Save connection status
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${widget.userName}:data';
+    final data = prefs.getString(key);
+    final saved = data != null ? jsonDecode(data) : {};
+    saved['SensorConnected'] = true;
+    saved['SensorDeviceName'] = 'Simulated IMU Sensor';
+    await prefs.setString(key, jsonEncode(saved));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Successfully connected to simulated sensor!')),
+    );
+  }
+
+  Future<void> _disconnectSensor() async {
+    setState(() {
+      _isConnected = false;
+      _connectionStatus = 'Disconnected';
+    });
+
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${widget.userName}:data';
+    final data = prefs.getString(key);
+    final saved = data != null ? jsonDecode(data) : {};
+    saved['SensorConnected'] = false;
+    saved.remove('SensorDeviceName');
+    await prefs.setString(key, jsonEncode(saved));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Sensor disconnected')),
+    );
+  }
+
+  Future<void> _startSensorRecording() async {
+    if (!_isConnected) return;
+    
+    setState(() {
+      _isRecording = true;
+    });
+    
+    // Initialize CSV with headers
+    _sensorCsvData.clear();
+    _sensorCsvData.writeln('timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z');
+    _recordingStartTime = DateTime.now();
+    
+    // Simulate sensor data collection at 50Hz (20ms intervals)
+    _sensorTimer = Timer.periodic(Duration(milliseconds: 20), (timer) {
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final random = math.Random();
+      
+      // Generate realistic sensor data with some noise
+      final accelX = (math.sin(timestamp / 200.0) * 2.0 + random.nextDouble() * 0.5 - 0.25);
+      final accelY = (9.8 + math.cos(timestamp / 300.0) * 1.0 + random.nextDouble() * 0.3 - 0.15);
+      final accelZ = (math.sin(timestamp / 250.0) * 1.5 + random.nextDouble() * 0.4 - 0.2);
+      final gyroX = (math.cos(timestamp / 400.0) * 0.5 + random.nextDouble() * 0.1 - 0.05);
+      final gyroY = (math.sin(timestamp / 350.0) * 0.3 + random.nextDouble() * 0.08 - 0.04);
+      final gyroZ = (math.cos(timestamp / 450.0) * 0.2 + random.nextDouble() * 0.06 - 0.03);
+      final magX = (25.0 + math.sin(timestamp / 1000.0) * 5.0 + random.nextDouble() * 2.0 - 1.0);
+      final magY = (15.0 + math.cos(timestamp / 800.0) * 3.0 + random.nextDouble() * 1.5 - 0.75);
+      final magZ = (-40.0 + math.sin(timestamp / 600.0) * 2.0 + random.nextDouble() * 1.0 - 0.5);
+      
+      final row = [
+        timestamp,
+        accelX.toStringAsFixed(4),
+        accelY.toStringAsFixed(4),
+        accelZ.toStringAsFixed(4),
+        gyroX.toStringAsFixed(4),
+        gyroY.toStringAsFixed(4),
+        gyroZ.toStringAsFixed(4),
+        magX.toStringAsFixed(4),
+        magY.toStringAsFixed(4),
+        magZ.toStringAsFixed(4),
+      ];
+      _sensorCsvData.writeln(row.join(','));
+    });
+  }
+
+  Future<void> _stopSensorRecording() async {
+    if (!_isRecording) return;
+    
+    setState(() {
+      _isRecording = false;
+    });
+    
+    _sensorTimer?.cancel();
+    
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final fileName = '${widget.userName}_sensor_${DateTime.now().millisecondsSinceEpoch}.csv';
+      final filePath = path.join(directory.path, fileName);
+      final file = File(filePath);
+
+      await file.writeAsString(_sensorCsvData.toString());
+      _lastSensorFilePath = filePath;
+
+      // Save sensor data path to SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+      saved['SensorDataPath'] = filePath;
+      await prefs.setString(key, jsonEncode(saved));
+
+      final recordingDuration = DateTime.now().difference(_recordingStartTime!);
+      print('Sensor data saved to: $filePath');
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sensor data saved: $fileName (${_formatDuration(recordingDuration)})')),
+      );
+      
+    } catch (e) {
+      print('Error saving sensor data: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error saving sensor data: $e')),
+      );
+    }
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$twoDigitMinutes:$twoDigitSeconds";
+  }
+
+  Future<void> _shareCSVFile() async {
+    try {
+      List<XFile> filesToShare = [];
+      List<String> fileNames = [];
+
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${widget.userName}:data';
+      final data = prefs.getString(key);
+      final saved = data != null ? jsonDecode(data) : {};
+
+      // Add sensor data if available
+      final sensorDataPath = saved['SensorDataPath'] as String?;
+      if (sensorDataPath != null && File(sensorDataPath).existsSync()) {
+        filesToShare.add(XFile(sensorDataPath));
+        fileNames.add(path.basename(sensorDataPath));
+      }
+
+      // Add all other files from previous steps
+      final demographicsPath = saved['DemographicsPath'] as String?;
+      if (demographicsPath != null && File(demographicsPath).existsSync()) {
+        filesToShare.add(XFile(demographicsPath));
+        fileNames.add(path.basename(demographicsPath));
+      }
+
+      final cleansedCsvPath = saved['CleansedCsvPath'] as String?;
+      if (cleansedCsvPath != null && File(cleansedCsvPath).existsSync()) {
+        filesToShare.add(XFile(cleansedCsvPath));
+        fileNames.add(path.basename(cleansedCsvPath));
+      }
+
+      if (filesToShare.isNotEmpty) {
+        await Share.shareXFiles(
+          filesToShare,
+          text: 'Complete Fall Risk Assessment data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
+          subject: 'Fall Risk Assessment - Complete Data Package',
+        );
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sharing ${filesToShare.length} file(s): ${fileNames.join(', ')}')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No files to share. Please complete the assessment first.')),
+        );
+      }
+    } catch (e) {
+      print('Error sharing files: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error sharing files: $e')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Sensor Page (Placeholder)'),
+        title: Text('Sensor Data Collection'),
         leading: BackButton(
           onPressed: () {
             Navigator.pushReplacement(
-                context, MaterialPageRoute(builder: (_) => VideoPageWrapper(userName: userName)));
+              context,
+              MaterialPageRoute(
+                builder: (_) => VideoPageWrapper(userName: widget.userName),
+              ),
+            );
           },
         ),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.share),
+            onPressed: _shareCSVFile,
+            tooltip: 'Share All Data',
+          ),
+        ],
       ),
-      body: Center(
-        child: Text('Sensor Page content goes here for user $userName'),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              _isConnected ? Icons.sensors : Icons.sensor_occupied,
+              size: 80,
+              color: _isConnected ? Colors.green : Colors.grey,
+            ),
+            SizedBox(height: 20),
+            
+            Text(
+              'Sensor Status',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+            
+            Text(
+              _connectionStatus,
+              style: TextStyle(
+                fontSize: 16,
+                color: _isConnected ? Colors.green : Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            
+            if (_isRecording) ...[
+              SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.fiber_manual_record, color: Colors.red, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Recording sensor data...',
+                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ],
+            
+            SizedBox(height: 30),
+
+            if (!_isConnected) ...[
+              ElevatedButton.icon(
+                onPressed: _simulateConnection,
+                icon: Icon(Icons.sensors),
+                label: Text('Connect to Simulated Sensor'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+              ),
+              SizedBox(height: 20),
+              Text(
+                'Note: This is a simulated sensor for demonstration purposes.\nIn a real implementation, this would connect to a physical IMU sensor.',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ],
+
+            if (_isConnected) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _isRecording ? _stopSensorRecording : _startSensorRecording,
+                    icon: Icon(_isRecording ? Icons.stop : Icons.play_arrow),
+                    label: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isRecording ? Colors.red : Colors.green,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: _disconnectSensor,
+                    icon: Icon(Icons.power_off),
+                    label: Text('Disconnect'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 30),
+              ElevatedButton.icon(
+                onPressed: _shareCSVFile,
+                icon: Icon(Icons.share),
+                label: Text('Share All Assessment Data'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+              ),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () => widget.onNext(),
+                child: Text('Complete Assessment'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.purple,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+              ),
+            ],
+
+            if (!_isConnected) ...[
+              SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: _shareCSVFile,
+                icon: Icon(Icons.share),
+                label: Text('Share Assessment Data'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+              SizedBox(height: 10),
+              TextButton(
+                onPressed: () => widget.onNext(),
+                child: Text('Complete Assessment Without Sensor'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.grey[600],
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
