@@ -1,0 +1,27 @@
+apply plugin: 'com.android.library'
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
+android {
+    // Add this line to specify the namespace
+    namespace 'io.github.edufolly.flutterbluetoothserial'
+    
+    compileSdkVersion 33
+    
+    defaultConfig {
+        minSdkVersion 19
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    lintOptions {
+        disable 'InvalidPackage'
+    }
+    dependencies {
+        implementation 'androidx.appcompat:appcompat:1.0.0'
+    }
+}
