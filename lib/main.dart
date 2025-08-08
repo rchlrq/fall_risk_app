@@ -95,7 +95,7 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
     } 
     else {
       Navigator.pushReplacement(
-    context, MaterialPageRoute(builder: (_) => DataLoggerScreen()));
+          context, MaterialPageRoute(builder: (_) => VideoPage(userName: name, onNext: () {})));
     }
   }
 
@@ -623,7 +623,7 @@ class VideoPageWrapper extends StatelessWidget {
       onNext: () {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => DataLoggerScreen()),
+          MaterialPageRoute(builder: (_) => VideoPage(userName: userName, onNext: () {})),
         );
       },
     );
@@ -2936,165 +2936,165 @@ class PosePainter extends CustomPainter {
 
 
 
-class DataLoggerScreen extends StatefulWidget {
-  @override
-  _DataLoggerScreenState createState() => _DataLoggerScreenState();
-}
+// class DataLoggerScreen extends StatefulWidget {
+//   @override
+//   _DataLoggerScreenState createState() => _DataLoggerScreenState();
+// }
 
-class _DataLoggerScreenState extends State<DataLoggerScreen> {
-  classic.BluetoothConnection? connection;
-  bool isConnected = false;
-  bool isCollecting = false;
-  List<String> dataLines = ["vx,vy,vz"]; // CSV header
+// class _DataLoggerScreenState extends State<DataLoggerScreen> {
+//   classic.BluetoothConnection? connection;
+//   bool isConnected = false;
+//   bool isCollecting = false;
+//   List<String> dataLines = ["vx,vy,vz"]; // CSV header
 
-  @override
-  void initState() {
-    super.initState();
-    requestPermissions();
-    connectToDevice();
-  }
+//   @override
+//   void initState() {
+//     super.initState();
+//     requestPermissions();
+//     connectToDevice();
+//   }
 
-  Future<void> requestPermissions() async {
-    await Permission.bluetooth.request();
-    await Permission.bluetoothScan.request();
-    await Permission.bluetoothConnect.request();
-    await Permission.storage.request();
+//   Future<void> requestPermissions() async {
+//     await Permission.bluetooth.request();
+//     await Permission.bluetoothScan.request();
+//     await Permission.bluetoothConnect.request();
+//     await Permission.storage.request();
 
-  }
+//   }
 
-  Future<void> connectToDevice() async {
-    classic.BluetoothDevice? hc06;
+//   Future<void> connectToDevice() async {
+//     classic.BluetoothDevice? hc06;
 
-    try {
-      hc06 = (await classic.FlutterBluetoothSerial.instance.getBondedDevices())
-          .firstWhere((d) => d.name == 'HC-06');
-    } catch (e) {
-      hc06 = null;
-    }
+//     try {
+//       hc06 = (await classic.FlutterBluetoothSerial.instance.getBondedDevices())
+//           .firstWhere((d) => d.name == 'HC-06');
+//     } catch (e) {
+//       hc06 = null;
+//     }
 
-    if (hc06 == null) {
-      showError("HC-06 not found. Pair it in Bluetooth settings first.");
-      return;
-    }
+//     if (hc06 == null) {
+//       showError("HC-06 not found. Pair it in Bluetooth settings first.");
+//       return;
+//     }
 
-    try {
-      classic.BluetoothConnection.toAddress(hc06.address).then((conn) {
-        connection = conn;
-        setState(() => isConnected = true);
-        showMessage("Connected to HC-06");
+//     try {
+//       classic.BluetoothConnection.toAddress(hc06.address).then((conn) {
+//         connection = conn;
+//         setState(() => isConnected = true);
+//         showMessage("Connected to HC-06");
 
-        conn.input?.listen((data) {
-          final message = String.fromCharCodes(data).trim();
-          if (isCollecting && message.contains(',')) {
-            setState(() {
-              dataLines.add(message);
-            });
-          }
-        }).onDone(() {
-          setState(() => isConnected = false);
-          showMessage("Connection closed");
-        });
-      });
-    } catch (e) {
-      showError("Connection failed: $e");
-    }
-  }
+//         conn.input?.listen((data) {
+//           final message = String.fromCharCodes(data).trim();
+//           if (isCollecting && message.contains(',')) {
+//             setState(() {
+//               dataLines.add(message);
+//             });
+//           }
+//         }).onDone(() {
+//           setState(() => isConnected = false);
+//           showMessage("Connection closed");
+//         });
+//       });
+//     } catch (e) {
+//       showError("Connection failed: $e");
+//     }
+//   }
 
-  void showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
-  }
+//   void showError(String msg) {
+//     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+//   }
 
-  void showMessage(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+//   void showMessage(String msg) {
+//     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+//   }
 
-  void sendCommand(String cmd) {
-    if (connection != null && connection!.isConnected) {
-      connection!.output.add(Uint8List.fromList("$cmd\n".codeUnits));
-    }
-  }
+//   void sendCommand(String cmd) {
+//     if (connection != null && connection!.isConnected) {
+//       connection!.output.add(Uint8List.fromList("$cmd\n".codeUnits));
+//     }
+//   }
 
-  void startLogging() {
-    if (!isConnected) return showError("Not connected.");
-    dataLines = ["vx,vy,vz"];
-    sendCommand("START\n");
-    setState(() => isCollecting = true);
-  }
+//   void startLogging() {
+//     if (!isConnected) return showError("Not connected.");
+//     dataLines = ["vx,vy,vz"];
+//     sendCommand("START\n");
+//     setState(() => isCollecting = true);
+//   }
 
-  void stopLogging() async {
-    if (!isConnected) return;
-    sendCommand("STOP\n");
-    setState(() => isCollecting = false);
-    await saveCSV();
-  }
+//   void stopLogging() async {
+//     if (!isConnected) return;
+//     sendCommand("STOP\n");
+//     setState(() => isCollecting = false);
+//     await saveCSV();
+//   }
 
-  Future<void> saveCSV() async {
-    final dir = await getExternalStorageDirectory();
-    final file = File("${dir!.path}/velocity_log.csv");
-    await file.writeAsString(dataLines.join('\n'));
-    showMessage("Data saved to velocity_log.csv");
-  }
+//   Future<void> saveCSV() async {
+//     final dir = await getExternalStorageDirectory();
+//     final file = File("${dir!.path}/velocity_log.csv");
+//     await file.writeAsString(dataLines.join('\n'));
+//     showMessage("Data saved to velocity_log.csv");
+//   }
 
-  Future<void> shareCSV() async {
-  final dir = await getExternalStorageDirectory();
-  if (dir == null) {
-    showError("Unable to access storage");
-    return;
-  }
-  final filePath = "${dir.path}/velocity_log.csv";
-  final file = File(filePath);
+//   Future<void> shareCSV() async {
+//   final dir = await getExternalStorageDirectory();
+//   if (dir == null) {
+//     showError("Unable to access storage");
+//     return;
+//   }
+//   final filePath = "${dir.path}/velocity_log.csv";
+//   final file = File(filePath);
 
-  if (!await file.exists()) {
-    showError("No CSV file found to share.");
-    return;
-  }
+//   if (!await file.exists()) {
+//     showError("No CSV file found to share.");
+//     return;
+//   }
 
-  try {
-    await Share.shareXFiles([XFile(filePath)], text: 'Here is the velocity log CSV file.');
-  } catch (e) {
-    showError("Failed to share file: $e");
-  }
-}
+//   try {
+//     await Share.shareXFiles([XFile(filePath)], text: 'Here is the velocity log CSV file.');
+//   } catch (e) {
+//     showError("Failed to share file: $e");
+//   }
+// }
 
-  @override
-  void dispose() {
-    connection?.dispose();
-    super.dispose();
-  }
+//   @override
+//   void dispose() {
+//     connection?.dispose();
+//     super.dispose();
+//   }
 
-  @override
-Widget build(BuildContext context) {
-  return Scaffold(
-    appBar: AppBar(title: Text("MPU6050 Logger")),
-    body: Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.bluetooth, size: 60, color: isConnected ? Colors.blue : Colors.grey),
-          SizedBox(height: 20),
-          Text(isCollecting ? "Collecting data..." : "Idle"),
-          SizedBox(height: 30),
-          ElevatedButton(
-            onPressed: isCollecting ? null : startLogging,
-            child: Text("START"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-          ),
-          SizedBox(height: 10),
-          ElevatedButton(
-            onPressed: isCollecting ? stopLogging : null,
-            child: Text("STOP & SAVE"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-          ),
-          SizedBox(height: 10),
-          ElevatedButton(
-            onPressed: isCollecting ? null : shareCSV,
-            child: Text("SHARE CSV"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-          ),
-        ],
-      ),
-    ),
-  );
-}
+//   @override
+// Widget build(BuildContext context) {
+//   return Scaffold(
+//     appBar: AppBar(title: Text("MPU6050 Logger")),
+//     body: Center(
+//       child: Column(
+//         mainAxisAlignment: MainAxisAlignment.center,
+//         children: [
+//           Icon(Icons.bluetooth, size: 60, color: isConnected ? Colors.blue : Colors.grey),
+//           SizedBox(height: 20),
+//           Text(isCollecting ? "Collecting data..." : "Idle"),
+//           SizedBox(height: 30),
+//           ElevatedButton(
+//             onPressed: isCollecting ? null : startLogging,
+//             child: Text("START"),
+//             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+//           ),
+//           SizedBox(height: 10),
+//           ElevatedButton(
+//             onPressed: isCollecting ? stopLogging : null,
+//             child: Text("STOP & SAVE"),
+//             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+//           ),
+//           SizedBox(height: 10),
+//           ElevatedButton(
+//             onPressed: isCollecting ? null : shareCSV,
+//             child: Text("SHARE CSV"),
+//             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+//           ),
+//         ],
+//       ),
+//     ),
+//   );
+// }
 
-}
+// }
