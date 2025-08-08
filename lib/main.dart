@@ -97,7 +97,7 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
     } 
     else {
       Navigator.pushReplacement(
-    context, MaterialPageRoute(builder: (_) => DataLoggerScreen()));
+    context, MaterialPageRoute(builder: (_) => DataLoggerScreen(userName: name)));
     }
   }
 
@@ -518,7 +518,7 @@ class _FallRiskPageState extends State<FallRiskPage> {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (_) => VideoPageWrapper(userName: widget.userName),
+        builder: (_) => DataLoggerScreen(userName: widget.userName),
       ),
     );
   }
@@ -614,6 +614,142 @@ class _FallRiskPageState extends State<FallRiskPage> {
   }
 }
 
+class DataLoggerScreen extends StatefulWidget {   
+  final String userName; // Add userName parameter
+  
+  const DataLoggerScreen({Key? key, required this.userName}) : super(key: key);
+  
+  @override   
+  _DataLoggerScreenState createState() => _DataLoggerScreenState(); 
+}  
+
+class _DataLoggerScreenState extends State<DataLoggerScreen> {   
+  classic.BluetoothConnection? connection;   
+  bool isConnected = false;   
+  String lastLine = "";   
+  String _buffer = "";   
+  List<String> dataLines = ["timestamp,accel_x,accel_y,accel_z"]; // CSV header    
+  
+  @override   
+  void initState() {     
+    super.initState();     
+    connectToHC06();   
+  }    
+  
+  Future<void> connectToHC06() async {     
+    try {       
+      final devices = await classic.FlutterBluetoothSerial.instance.getBondedDevices();       
+      final hc06 = devices.firstWhere((d) => d.name == 'HC-06');       
+      print("Found HC-06 at ${hc06.address}");        
+      
+      connection = await classic.BluetoothConnection.toAddress(hc06.address);       
+      setState(() => isConnected = true);       
+      print("Connected to HC-06");        
+      
+      connection!.input?.listen((data) {         
+        final raw = String.fromCharCodes(data);         
+        print("Raw Bluetooth data chunk: '$raw'");         
+        _buffer += raw;          
+        
+        while (_buffer.contains('\n')) {           
+          final idx = _buffer.indexOf('\n');           
+          final line = _buffer.substring(0, idx).trim();           
+          _buffer = _buffer.substring(idx + 1);           
+          print("Parsed line: '$line'");           
+          setState(() {             
+            lastLine = line;           
+          });           
+          // Save each line to dataLines           
+          final timestamp = DateTime.now().millisecondsSinceEpoch;           
+          dataLines.add("$timestamp,$line");         
+        }       
+      }).onDone(() {         
+        print("Disconnected from HC-06");         
+        setState(() => isConnected = false);       
+      });     
+    } catch (e) {       
+      print("Connection failed: $e");       
+      setState(() => isConnected = false);     
+    }   
+  }    
+  
+  void sendCommand(String cmd) {   
+    if (connection != null && connection!.isConnected) {     
+      // Try sending without newline     
+      connection!.output.add(Uint8List.fromList(cmd.codeUnits));     
+      connection!.output.allSent.then((_) {       
+        print("Sent command: $cmd");     
+      });   
+    } 
+  }
+  
+  Future<void> saveCSV() async {     
+    final dir = await getApplicationDocumentsDirectory();     
+    final file = File("${dir.path}/hc06_accel_log.csv");     
+    await file.writeAsString(dataLines.join('\n'));     
+    ScaffoldMessenger.of(context).showSnackBar(       
+      SnackBar(content: Text("Data saved to hc06_accel_log.csv")),     
+    );   
+  }    
+  
+  @override   
+  void dispose() {     
+    connection?.dispose();     
+    super.dispose();   
+  }    
+  
+  @override   
+  Widget build(BuildContext context) {     
+    return Scaffold(       
+      appBar: AppBar(title: Text("Bluetooth Debug")),       
+      body: Center(         
+        child: Column(           
+          mainAxisAlignment: MainAxisAlignment.center,           
+          children: [             
+            Text(               
+              isConnected ? "Connected to HC-06" : "Not connected",               
+              style: TextStyle(fontSize: 18, color: isConnected ? Colors.green : Colors.red),             
+            ),             
+            SizedBox(height: 20),             
+            ElevatedButton(               
+              onPressed: isConnected ? () => sendCommand("START") : null,               
+              child: Text("Send START"),             
+            ),             
+            ElevatedButton(               
+              onPressed: isConnected ? () => sendCommand("STOP") : null,               
+              child: Text("Send STOP"),             
+            ),             
+            SizedBox(height: 20),             
+            ElevatedButton(               
+              onPressed: dataLines.length > 1 ? saveCSV : null,               
+              child: Text("Save CSV"),             
+            ),             
+            SizedBox(height: 40),             
+            Text("Last received line:", style: TextStyle(fontWeight: FontWeight.bold)),             
+            SizedBox(height: 10),             
+            Text(lastLine, style: TextStyle(fontSize: 24)),
+            SizedBox(height: 40),
+            // Add button to navigate to VideoPage
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => VideoPageWrapper(userName: widget.userName)),
+                );
+              },
+              child: Text("Continue to Video Recording"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+              ),
+            ),           
+          ],         
+        ),       
+      ),     
+    );   
+  } 
+}
+
 class VideoPageWrapper extends StatelessWidget {
   final String userName;
   VideoPageWrapper({required this.userName});
@@ -625,7 +761,7 @@ class VideoPageWrapper extends StatelessWidget {
       onNext: () {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => DataLoggerScreen()),
+          MaterialPageRoute(builder: (_) => DataLoggerScreen(userName: userName)),
         );
       },
     );
@@ -1863,6 +1999,8 @@ class _VideoPageState extends State<VideoPage> {
     }
   }
 
+  
+
   Future<void> _shareCSVFile() async {
     try {
       List<XFile> filesToShare = [];
@@ -2410,514 +2548,172 @@ class PosePainter extends CustomPainter {
 //     }
 //   }
 
-  // void _onDataReceived(List<int> data) {
-  //   if (_isRecording && data.isNotEmpty) {
-  //     try {
-  //       final timestamp = DateTime.now().millisecondsSinceEpoch;
+//   void _onDataReceived(List<int> data) {
+//     if (_isRecording && data.isNotEmpty) {
+//       try {
+//         final timestamp = DateTime.now().millisecondsSinceEpoch;
 
-  //       // Example: If your sensor sends ASCII data, decode as string
-  //       // final sensorString = utf8.decode(data);
-  //       // _sensorCsvData.writeln('$timestamp,$sensorString');
+        // Example: If your sensor sends ASCII data, decode as string
+        // final sensorString = utf8.decode(data);
+        // _sensorCsvData.writeln('$timestamp,$sensorString');
 
-  //       // Example: If your sensor sends comma-separated values (e.g., "12.3,45.6,78.9")
-  //       final sensorString = utf8.decode(data);
-  //       final values = sensorString.trim().split(',');
-  //       if (values.length >= 3) {
-  //         // Write timestamp and sensor values to CSV
-  //         _sensorCsvData.writeln('$timestamp,${values.join(",")}');
-  //       } else {
-  //         // If format is unknown, just log raw data
-  //         _sensorCsvData.writeln('$timestamp,${data.join(",")}');
-  //       }
-  //     } catch (e) {
-  //       print('Error parsing sensor data: $e');
-  //     }
-  //   }
+        // Example: If your sensor sends comma-separated values (e.g., "12.3,45.6,78.9")
+        // final sensorString = utf8.decode(data);
+        // final values = sensorString.trim().split(',');
+        // if (values.length >= 3) {
+        //   // Write timestamp and sensor values to CSV
+        //   _sensorCsvData.writeln('$timestamp,${values.join(",")}');
+        // } else {
+        //   // If format is unknown, just log raw data
+        //   _sensorCsvData.writeln('$timestamp,${data.join(",")}');
+        // }
+      // } catch (e) {
+      //   print('Error parsing sensor data: $e');
+      // }
+    // }
   // }
 
-  // Future<void> _disconnectDevice() async {
-  //   try {
-  //     _dataSubscription?.cancel();
-  //     await _connectedDevice?.disconnect();
+//   Future<void> _disconnectDevice() async {
+//     try {
+//       _dataSubscription?.cancel();
+//       await _connectedDevice?.disconnect();
       
-  //     setState(() {
-  //       _isConnected = false;
-  //       _connectedDevice = null;
-  //       _dataCharacteristic = null;
-  //       _connectionStatus = 'Disconnected';
-  //     });
-  //   } catch (e) {
-  //     print('Error disconnecting: $e');
-  //   }
-  // }
-
-  // Future<void> _startSensorRecording() async {
-  //   if (!_isConnected || _dataCharacteristic == null) return;
-
-  //   setState(() {
-  //     _isRecording = true;
-  //     _recordingStartTime = DateTime.now();
-  //     _recordingDuration = Duration.zero;
-  //   });
-
-  //   // Initialize CSV with headers
-  //   _sensorCsvData.clear();
-  //   _sensorCsvData.writeln('timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z');
-
-  //   // Start recording timer
-  //   _recordingTimer = Timer.periodic(Duration(seconds: 1), (timer) {
-  //     if (_isRecording && _recordingStartTime != null && mounted) {
-  //       setState(() {
-  //         _recordingDuration = DateTime.now().difference(_recordingStartTime!);
-  //       });
-  //     }
-  //   });
-
-  //   // Send "START" command to HC-06 Arduino to begin sending data
-  //   try {
-  //     // HC-06 expects ASCII, so send "START\n"
-  //     await _dataCharacteristic!.write(utf8.encode("START\n"), withoutResponse: true);
-  //   } catch (e) {
-  //     print('Error sending START to HC-06: $e');
-  //   }
-
-  //   ScaffoldMessenger.of(context).showSnackBar(
-  //     SnackBar(content: Text('Started recording sensor data')),
-  //   );
-  // }
-
-  // Future<void> _stopSensorRecording() async {
-  //   if (!_isRecording || _dataCharacteristic == null) return;
-
-  //   _recordingTimer?.cancel();
-
-  //   setState(() {
-  //     _isRecording = false;
-  //   });
-
-  //   // Send "STOP" command to HC-06 Arduino to stop sending data
-  //   try {
-  //     await _dataCharacteristic!.write(utf8.encode("STOP\n"), withoutResponse: true);
-  //   } catch (e) {
-  //     print('Error sending STOP to HC-06: $e');
-  //   }
-
-  //   try {
-  //     final directory = await getApplicationDocumentsDirectory();
-  //     final fileName = '${widget.userName}_sensor_${DateTime.now().millisecondsSinceEpoch}.csv';
-  //     final filePath = path.join(directory.path, fileName);
-  //     final file = File(filePath);
-
-  //     await file.writeAsString(_sensorCsvData.toString());
-  //     _lastSensorFilePath = filePath;
-
-  //     // Save sensor data path to SharedPreferences
-  //     final prefs = await SharedPreferences.getInstance();
-  //     final key = '${widget.userName}:data';
-  //     final data = prefs.getString(key);
-  //     final saved = data != null ? jsonDecode(data) : {};
-  //     saved['SensorDataPath'] = filePath;
-  //     await prefs.setString(key, jsonEncode(saved));
-
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text('Sensor data saved: $fileName (${_formatDuration(_recordingDuration)})')),
-  //     );
-      
-  //   } catch (e) {
-  //     print('Error saving sensor data: $e');
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text('Error saving sensor data: $e')),
-  //     );
-  //   }
-  // }
-
-  // Future<void> _shareCSVFile() async {
-  //   try {
-  //     List<XFile> filesToShare = [];
-  //     List<String> fileNames = [];
-
-  //     final prefs = await SharedPreferences.getInstance();
-  //     final key = '${widget.userName}:data';
-  //     final data = prefs.getString(key);
-  //     final saved = data != null ? jsonDecode(data) : {};
-
-  //     final sensorPath = saved['SensorDataPath'] as String?;
-  //     if (sensorPath != null && File(sensorPath).existsSync()) {
-  //       filesToShare.add(XFile(sensorPath));
-  //       fileNames.add(path.basename(sensorPath));
-  //     }
-
-  //     if (filesToShare.isNotEmpty) {
-  //       await Share.shareXFiles(
-  //         filesToShare,
-  //         text: 'Sensor data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
-  //         subject: 'Fall Risk Assessment - Sensor Data',
-  //       );
-  //       ScaffoldMessenger.of(context).showSnackBar(
-  //         SnackBar(content: Text('Sharing ${filesToShare.length} file(s): ${fileNames.join(', ')}')),
-  //       );
-  //     } else {
-  //       ScaffoldMessenger.of(context).showSnackBar(
-  //         SnackBar(content: Text('No sensor data to share. Please record and save sensor data first.')),
-  //       );
-  //     }
-  //   } catch (e) {
-  //     print('Error sharing sensor files: $e');
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text('Error sharing sensor files: $e')),
-  //     );
-  //   }
-  // }
-  
-  // Future<void> _deleteOldFile() async {
-  //   if (_lastSensorFilePath != null && File(_lastSensorFilePath!).existsSync()) {
-  //     try {
-  //       await File(_lastSensorFilePath!).delete();
-  //       print('Deleted old sensor file: $_lastSensorFilePath');
-  //     } catch (e) {
-  //       print('Error deleting old sensor file: $e');
-  //     }
-  //   }
-  // }
-
-  
-//   void sendCommand(String cmd) {
-//     if (connection != null && connection!.isConnected) {
-//       connection!.output.add(Uint8List.fromList("$cmd\n".codeUnits));
+//       setState(() {
+//         _isConnected = false;
+//         _connectedDevice = null;
+//         _dataCharacteristic = null;
+//         _connectionStatus = 'Disconnected';
+//       });
+//     } catch (e) {
+//       print('Error disconnecting: $e');
 //     }
 //   }
 
-//   void startLogging() {
-//     if (!isConnected) return showError("Not connected.");
-//     dataLines = ["vx,vy,vz"];
-//     sendCommand("START");
-//     setState(() => isCollecting = true);
-//   }
+//   Future<void> _startSensorRecording() async {
+//     if (!_isConnected || _dataCharacteristic == null) return;
 
-//   void stopLogging() async {
-//     if (!isConnected) return;
-//     sendCommand("STOP");
-//     setState(() => isCollecting = false);
-//     await saveCSV();
-//   }
+//     setState(() {
+//       _isRecording = true;
+//       _recordingStartTime = DateTime.now();
+//       _recordingDuration = Duration.zero;
+//     });
 
-//   Future<void> saveCSV() async {
-//     final dir = await getExternalStorageDirectory();
-//     final file = File("${dir!.path}/velocity_log.csv");
-//     await file.writeAsString(dataLines.join('\n'));
-//     showMessage("Data saved to velocity_log.csv");
-//   }
+//     // Initialize CSV with headers
+//     _sensorCsvData.clear();
+//     _sensorCsvData.writeln('timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z');
 
+//     // Start recording timer
+//     _recordingTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+//       if (_isRecording && _recordingStartTime != null && mounted) {
+//         setState(() {
+//           _recordingDuration = DateTime.now().difference(_recordingStartTime!);
+//         });
+//       }
+//     });
 
-//   @override
-//   Widget build(BuildContext context) {
-//     return Scaffold(
-//       appBar: AppBar(
-//         title: Text('Sensor Connection'),
-//         leading: BackButton(
-//           onPressed: () {
-//             Navigator.pushReplacement(
-//               context,
-//               MaterialPageRoute(
-//                 builder: (_) => VideoPageWrapper(userName: widget.userName),
-//               ),
-//             );
-//           },
-//         ),
-//         actions: [
-//           IconButton(
-//             icon: Icon(Icons.share),
-//             onPressed: _shareCSVFile,
-//             tooltip: 'Share All Data',
-//           ),
-//         ],
-//       ),
-//       body: Padding(
-//         padding: const EdgeInsets.all(16.0),
-//         child: SingleChildScrollView( // <-- added scroll view
-//           child: ConstrainedBox(
-//             constraints: BoxConstraints(
-//               minHeight: MediaQuery.of(context).size.height - 32,
-//             ),
-//             child: Column(
-//               mainAxisAlignment: MainAxisAlignment.center,
-//               children: [
-//                 Icon(
-//                   _isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
-//                   size: 80,
-//                   color: _isConnected ? Colors.green : Colors.grey,
-//                 ),
-//                 SizedBox(height: 20),
-                
-//                 Text(
-//                   'Sensor Status',
-//                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-//                 ),
-//                 SizedBox(height: 10),
-                
-//                 Text(
-//                   _connectionStatus,
-//                   style: TextStyle(
-//                     fontSize: 16,
-//                     color: _isConnected ? Colors.green : Colors.grey[600],
-//                   ),
-//                   textAlign: TextAlign.center,
-//                 ),
-                
-//                 if (_connectedDevice != null) ...[
-//                   SizedBox(height: 10),
-//                   Text(
-//                     'Connected to: ${_connectedDevice!.platformName}',
-//                     style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-//                   ),
-//                 ],
-                
-//                 if (_isRecording) ...[
-//                   SizedBox(height: 20),
-//                   Row(
-//                     mainAxisAlignment: MainAxisAlignment.center,
-//                     children: [
-//                       Icon(Icons.fiber_manual_record, color: Colors.red, size: 20),
-//                       SizedBox(width: 8),
-//                       Text(
-//                         'Recording: ${_formatDuration(_recordingDuration)}',
-//                         style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-//                       ),
-//                     ],
-//                   ),
-//                 ],
-                
-//                 SizedBox(height: 30),
+//     // Send "START" command to HC-06 Arduino to begin sending data
+//     try {
+//       // HC-06 expects ASCII, so send "START\n"
+//       await _dataCharacteristic!.write(utf8.encode("START\n"), withoutResponse: true);
+//     } catch (e) {
+//       print('Error sending START to HC-06: $e');
+//     }
 
-//                 if (_isScanning) ...[
-//                   CircularProgressIndicator(),
-//                   SizedBox(height: 20),
-//                   Text('Searching for Bluetooth devices...'),
-//                 ],
-
-//                 if (_discoveredDevices.isNotEmpty && !_isConnected) ...[
-//                   Text(
-//                     'Discovered Devices:',
-//                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-//                   ),
-//                   SizedBox(height: 10),
-//                   SizedBox(
-//                     height: 200, // <-- fixed height for device list
-//                     child: ListView.builder(
-//                       itemCount: _discoveredDevices.length,
-//                       itemBuilder: (context, index) {
-//                         final device = _discoveredDevices[index];
-//                         return Card(
-//                           child: ListTile(
-//                             leading: Icon(Icons.sensors),
-//                             title: Text(device.platformName.isNotEmpty ? device.platformName : 'Unknown Device'),
-//                             subtitle: Text(device.remoteId.toString()),
-//                             trailing: Icon(Icons.bluetooth),
-//                             onTap: () => _connectToDevice(device),
-//                           ),
-//                         );
-//                       },
-//                     ),
-//                   ),
-//                   SizedBox(height: 20),
-//                 ],
-
-//                 if (!_isConnected && !_isScanning) ...[
-//                   ElevatedButton.icon(
-//                     onPressed: _startScan,
-//                     icon: Icon(Icons.bluetooth_searching),
-//                     label: Text('Scan for Sensors'),
-//                     style: ElevatedButton.styleFrom(
-//                       backgroundColor: Colors.blue,
-//                       foregroundColor: Colors.white,
-//                       padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-//                     ),
-//                   ),
-//                 ],
-
-//                 if (_isConnected) ...[
-//                   Row(
-//                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-//                     children: [
-//                       ElevatedButton.icon(
-//                         onPressed: _isRecording ? _stopSensorRecording : _startSensorRecording,
-//                         icon: Icon(_isRecording ? Icons.stop : Icons.play_arrow),
-//                         label: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
-//                         style: ElevatedButton.styleFrom(
-//                           backgroundColor: _isRecording ? Colors.red : Colors.green,
-//                           foregroundColor: Colors.white,
-//                         ),
-//                       ),
-//                       ElevatedButton.icon(
-//                         onPressed: _disconnectDevice,
-//                         icon: Icon(Icons.bluetooth_disabled),
-//                         label: Text('Disconnect'),
-//                         style: ElevatedButton.styleFrom(
-//                           backgroundColor: Colors.red,
-//                           foregroundColor: Colors.white,
-//                         ),
-//                       ),
-//                     ],
-//                   ),
-//                   SizedBox(height: 20),
-//                 ],
-
-//                 ElevatedButton.icon(
-//                   onPressed: _shareCSVFile,
-//                   icon: Icon(Icons.share),
-//                   label: Text('Share All Assessment Data'),
-//                   style: ElevatedButton.styleFrom(
-//                     backgroundColor: Colors.blue,
-//                     foregroundColor: Colors.white,
-//                     padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-//                   ),
-//                 ),
-//                 SizedBox(height: 20),
-//                 ElevatedButton(
-//                   onPressed: () => widget.onNext(),
-//                   child: Text('Complete Assessment'),
-//                   style: ElevatedButton.styleFrom(
-//                     backgroundColor: Colors.green,
-//                     foregroundColor: Colors.white,
-//                     padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12), // <-- fixed padding
-//                   ),
-//                 ),
-
-//                 if (!_isConnected && !_isScanning) ...[
-//                   SizedBox(height: 10),
-//                   TextButton(
-//                     onPressed: () => widget.onNext(),
-//                     child: Text('Skip Sensor Connection'),
-//                     style: TextButton.styleFrom(
-//                       foregroundColor: Colors.grey[600],
-//                     ),
-//                   ),
-//                 ],
-//               ],
-//             ),
-//           ),
-//         ),
-//       ),
+//     ScaffoldMessenger.of(context).showSnackBar(
+//       SnackBar(content: Text('Started recording sensor data')),
 //     );
 //   }
-// }
 
+//   Future<void> _stopSensorRecording() async {
+//     if (!_isRecording || _dataCharacteristic == null) return;
 
+//     _recordingTimer?.cancel();
 
-class DataLoggerScreen extends StatefulWidget {
-  @override
-  _DataLoggerScreenState createState() => _DataLoggerScreenState();
-}
+//     setState(() {
+//       _isRecording = false;
+//     });
 
-class _DataLoggerScreenState extends State<DataLoggerScreen> {
-  classic.BluetoothConnection? connection;
-  bool isConnected = false;
-  String lastLine = "";
-  String _buffer = "";
-  List<String> dataLines = ["timestamp,accel_x,accel_y,accel_z"]; // CSV header
+//     // Send "STOP" command to HC-06 Arduino to stop sending data
+//     try {
+//       await _dataCharacteristic!.write(utf8.encode("STOP\n"), withoutResponse: true);
+//     } catch (e) {
+//       print('Error sending STOP to HC-06: $e');
+//     }
 
-  @override
-  void initState() {
-    super.initState();
-    connectToHC06();
-  }
+//     try {
+//       final directory = await getApplicationDocumentsDirectory();
+//       final fileName = '${widget.userName}_sensor_${DateTime.now().millisecondsSinceEpoch}.csv';
+//       final filePath = path.join(directory.path, fileName);
+//       final file = File(filePath);
 
-  Future<void> connectToHC06() async {
-    try {
-      final devices = await classic.FlutterBluetoothSerial.instance.getBondedDevices();
-      final hc06 = devices.firstWhere((d) => d.name == 'HC-06');
-      print("Found HC-06 at ${hc06.address}");
+//       await file.writeAsString(_sensorCsvData.toString());
+//       _lastSensorFilePath = filePath;
 
-      connection = await classic.BluetoothConnection.toAddress(hc06.address);
-      setState(() => isConnected = true);
-      print("Connected to HC-06");
+//       // Save sensor data path to SharedPreferences
+//       final prefs = await SharedPreferences.getInstance();
+//       final key = '${widget.userName}:data';
+//       final data = prefs.getString(key);
+//       final saved = data != null ? jsonDecode(data) : {};
+//       saved['SensorDataPath'] = filePath;
+//       await prefs.setString(key, jsonEncode(saved));
 
-      connection!.input?.listen((data) {
-        final raw = String.fromCharCodes(data);
-        print("Raw Bluetooth data chunk: '$raw'");
-        _buffer += raw;
+//       ScaffoldMessenger.of(context).showSnackBar(
+//         SnackBar(content: Text('Sensor data saved: $fileName (${_formatDuration(_recordingDuration)})')),
+//       );
+      
+//     } catch (e) {
+//       print('Error saving sensor data: $e');
+//       ScaffoldMessenger.of(context).showSnackBar(
+//         SnackBar(content: Text('Error saving sensor data: $e')),
+//       );
+//     }
+//   }
 
-        while (_buffer.contains('\n')) {
-          final idx = _buffer.indexOf('\n');
-          final line = _buffer.substring(0, idx).trim();
-          _buffer = _buffer.substring(idx + 1);
-          print("Parsed line: '$line'");
-          setState(() {
-            lastLine = line;
-          });
-          // Save each line to dataLines
-          final timestamp = DateTime.now().millisecondsSinceEpoch;
-          dataLines.add("$timestamp,$line");
-        }
-      }).onDone(() {
-        print("Disconnected from HC-06");
-        setState(() => isConnected = false);
-      });
-    } catch (e) {
-      print("Connection failed: $e");
-      setState(() => isConnected = false);
-    }
-  }
+//   Future<void> _shareCSVFile() async {
+//     try {
+//       List<XFile> filesToShare = [];
+//       List<String> fileNames = [];
 
-  void sendCommand(String cmd) {
-  if (connection != null && connection!.isConnected) {
-    // Try sending without newline
-    connection!.output.add(Uint8List.fromList(cmd.codeUnits));
-    connection!.output.allSent.then((_) {
-      print("Sent command: $cmd");
-    });
-  }
-}
-// 
+      // final prefs = await SharedPreferences.getInstance();
+      // final key = '${widget.userName}:data';
+      // final data = prefs.getString(key);
+      // final saved = data != null ? jsonDecode(data) : {};
 
-  Future<void> saveCSV() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File("${dir.path}/hc06_accel_log.csv");
-    await file.writeAsString(dataLines.join('\n'));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Data saved to hc06_accel_log.csv")),
-    );
-  }
+      // final sensorPath = saved['SensorDataPath'] as String?;
+      // if (sensorPath != null && File(sensorPath).existsSync()) {
+      //   filesToShare.add(XFile(sensorPath));
+      //   fileNames.add(path.basename(sensorPath));
+      // }
 
-  @override
-  void dispose() {
-    connection?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text("Bluetooth Debug")),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              isConnected ? "Connected to HC-06" : "Not connected",
-              style: TextStyle(fontSize: 18, color: isConnected ? Colors.green : Colors.red),
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: isConnected ? () => sendCommand("START") : null,
-              child: Text("Send START"),
-            ),
-            ElevatedButton(
-              onPressed: isConnected ? () => sendCommand("STOP") : null,
-              child: Text("Send STOP"),
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: dataLines.length > 1 ? saveCSV : null,
-              child: Text("Save CSV"),
-            ),
-            SizedBox(height: 40),
-            Text("Last received line:", style: TextStyle(fontWeight: FontWeight.bold)),
-            SizedBox(height: 10),
-            Text(lastLine, style: TextStyle(fontSize: 24)),
-          ],
-        ),
-      ),
-    );
-  }
-}
+      // if (filesToShare.isNotEmpty) {
+      //   await Share.shareXFiles(
+      //     filesToShare,
+      //     text: 'Sensor data for ${widget.userName}\n\nFiles included:\n${fileNames.map((name) => '• $name').join('\n')}',
+      //     subject: 'Fall Risk Assessment - Sensor Data',
+      //   );
+      //   ScaffoldMessenger.of(context).showSnackBar(
+      //     SnackBar(content: Text('Sharing ${filesToShare.length} file(s): ${fileNames.join(', ')}')),
+      //   );
+      // } else {
+      //   ScaffoldMessenger.of(context).showSnackBar(
+      //     SnackBar(content: Text('No sensor data to share. Please record and save sensor data first.')),
+      //   );
+      // }
+    // } catch (e) {
+    //   print('Error sharing sensor files: $e');
+    //   ScaffoldMessenger.of(context).showSnackBar(
+    //     SnackBar(content: Text('Error sharing sensor files: $e')),
+    //   );
+    // }
+  // }
+  
+//   Future<void> _deleteOldFile() async {
+//     if (_lastSensorFilePath != null && File(_lastSensorFilePath!).existsSync()) {
+//       try {
+//         await File(_lastSensorFilePath!).delete();
+//         print('Deleted old sensor file: $_lastSensorFilePath');
+//       } catch (e) {
+//         print('Error deleting old sensor file: $e');
+//       }
+    // }
+  // }
