@@ -18,7 +18,9 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as ble; // BLE library
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart' as classic; // Classic Bluetooth
+import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart' as classic; 
+import 'package:path_provider/path_provider.dart';
+// Classic Bluetooth
 
 void main() {
   runApp(MaterialApp(
@@ -2810,117 +2812,72 @@ class DataLoggerScreen extends StatefulWidget {
 class _DataLoggerScreenState extends State<DataLoggerScreen> {
   classic.BluetoothConnection? connection;
   bool isConnected = false;
-  bool isCollecting = false;
-  List<String> dataLines = ["vx,vy,vz"]; // CSV header
+  String lastLine = "";
+  String _buffer = "";
+  List<String> dataLines = ["timestamp,accel_x,accel_y,accel_z"]; // CSV header
 
   @override
   void initState() {
     super.initState();
-    requestPermissions();
-    connectToDevice();
+    connectToHC06();
   }
 
-  Future<void> requestPermissions() async {
-    await Permission.bluetooth.request();
-    await Permission.bluetoothScan.request();
-    await Permission.bluetoothConnect.request();
-    await Permission.storage.request();
-
-  }
-
-  Future<void> connectToDevice() async {
-    classic.BluetoothDevice? hc06;
-
+  Future<void> connectToHC06() async {
     try {
-      hc06 = (await classic.FlutterBluetoothSerial.instance.getBondedDevices())
-          .firstWhere((d) => d.name == 'HC-06');
-    } catch (e) {
-      hc06 = null;
-    }
+      final devices = await classic.FlutterBluetoothSerial.instance.getBondedDevices();
+      final hc06 = devices.firstWhere((d) => d.name == 'HC-06');
+      print("Found HC-06 at ${hc06.address}");
 
-    if (hc06 == null) {
-      showError("HC-06 not found. Pair it in Bluetooth settings first.");
-      return;
-    }
+      connection = await classic.BluetoothConnection.toAddress(hc06.address);
+      setState(() => isConnected = true);
+      print("Connected to HC-06");
 
-    try {
-      classic.BluetoothConnection.toAddress(hc06.address).then((conn) {
-        connection = conn;
-        setState(() => isConnected = true);
-        showMessage("Connected to HC-06");
+      connection!.input?.listen((data) {
+        final raw = String.fromCharCodes(data);
+        print("Raw Bluetooth data chunk: '$raw'");
+        _buffer += raw;
 
-        conn.input?.listen((data) {
-          final message = String.fromCharCodes(data).trim();
-          if (isCollecting && message.contains(',')) {
-            setState(() {
-              dataLines.add(message);
-            });
-          }
-        }).onDone(() {
-          setState(() => isConnected = false);
-          showMessage("Connection closed");
-        });
+        while (_buffer.contains('\n')) {
+          final idx = _buffer.indexOf('\n');
+          final line = _buffer.substring(0, idx).trim();
+          _buffer = _buffer.substring(idx + 1);
+          print("Parsed line: '$line'");
+          setState(() {
+            lastLine = line;
+          });
+          // Save each line to dataLines
+          final timestamp = DateTime.now().millisecondsSinceEpoch;
+          dataLines.add("$timestamp,$line");
+        }
+      }).onDone(() {
+        print("Disconnected from HC-06");
+        setState(() => isConnected = false);
       });
     } catch (e) {
-      showError("Connection failed: $e");
+      print("Connection failed: $e");
+      setState(() => isConnected = false);
     }
-  }
-
-  void showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
-  }
-
-  void showMessage(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   void sendCommand(String cmd) {
-    if (connection != null && connection!.isConnected) {
-      connection!.output.add(Uint8List.fromList("$cmd\n".codeUnits));
-    }
-  }
-
-  void startLogging() {
-    if (!isConnected) return showError("Not connected.");
-    dataLines = ["vx,vy,vz"];
-    sendCommand("START\n");
-    setState(() => isCollecting = true);
-  }
-
-  void stopLogging() async {
-    if (!isConnected) return;
-    sendCommand("STOP\n");
-    setState(() => isCollecting = false);
-    await saveCSV();
-  }
-
-  Future<void> saveCSV() async {
-    final dir = await getExternalStorageDirectory();
-    final file = File("${dir!.path}/velocity_log.csv");
-    await file.writeAsString(dataLines.join('\n'));
-    showMessage("Data saved to velocity_log.csv");
-  }
-
-  Future<void> shareCSV() async {
-  final dir = await getExternalStorageDirectory();
-  if (dir == null) {
-    showError("Unable to access storage");
-    return;
-  }
-  final filePath = "${dir.path}/velocity_log.csv";
-  final file = File(filePath);
-
-  if (!await file.exists()) {
-    showError("No CSV file found to share.");
-    return;
-  }
-
-  try {
-    await Share.shareXFiles([XFile(filePath)], text: 'Here is the velocity log CSV file.');
-  } catch (e) {
-    showError("Failed to share file: $e");
+  if (connection != null && connection!.isConnected) {
+    // Try sending without newline
+    connection!.output.add(Uint8List.fromList(cmd.codeUnits));
+    connection!.output.allSent.then((_) {
+      print("Sent command: $cmd");
+    });
   }
 }
+// 
+
+  Future<void> saveCSV() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File("${dir.path}/hc06_accel_log.csv");
+    await file.writeAsString(dataLines.join('\n'));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Data saved to hc06_accel_log.csv")),
+    );
+  }
 
   @override
   void dispose() {
@@ -2929,38 +2886,38 @@ class _DataLoggerScreenState extends State<DataLoggerScreen> {
   }
 
   @override
-Widget build(BuildContext context) {
-  return Scaffold(
-    appBar: AppBar(title: Text("MPU6050 Logger")),
-    body: Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.bluetooth, size: 60, color: isConnected ? Colors.blue : Colors.grey),
-          SizedBox(height: 20),
-          Text(isCollecting ? "Collecting data..." : "Idle"),
-          SizedBox(height: 30),
-          ElevatedButton(
-            onPressed: isCollecting ? null : startLogging,
-            child: Text("START"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-          ),
-          SizedBox(height: 10),
-          ElevatedButton(
-            onPressed: isCollecting ? stopLogging : null,
-            child: Text("STOP & SAVE"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-          ),
-          SizedBox(height: 10),
-          ElevatedButton(
-            onPressed: isCollecting ? null : shareCSV,
-            child: Text("SHARE CSV"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-          ),
-        ],
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("Bluetooth Debug")),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              isConnected ? "Connected to HC-06" : "Not connected",
+              style: TextStyle(fontSize: 18, color: isConnected ? Colors.green : Colors.red),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: isConnected ? () => sendCommand("START") : null,
+              child: Text("Send START"),
+            ),
+            ElevatedButton(
+              onPressed: isConnected ? () => sendCommand("STOP") : null,
+              child: Text("Send STOP"),
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: dataLines.length > 1 ? saveCSV : null,
+              child: Text("Save CSV"),
+            ),
+            SizedBox(height: 40),
+            Text("Last received line:", style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 10),
+            Text(lastLine, style: TextStyle(fontSize: 24)),
+          ],
+        ),
       ),
-    ),
-  );
-}
-
+    );
+  }
 }
