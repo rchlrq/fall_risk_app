@@ -2420,404 +2420,320 @@ class CsvPredictionPage extends StatefulWidget {
   @override
   _CsvPredictionPageState createState() => _CsvPredictionPageState();
 }
+
 class _CsvPredictionPageState extends State<CsvPredictionPage> {
-Interpreter? _interpreter;
-  List<List<double>>? _csvData;
-  String _output = 'Loading...';
-
-  static const String modelPath = 'model.tflite';
-
-  // Your internal CSV filename
-  static const String csvFileName = 'cleansedCsvPath.csv';
-
-  // Set your model's output tensor size here
-  static const int outputSize = 3;
+  PredictionResult? _predictionResult;
+  bool _loading = false;
+  String? _error;
+  List<double>? _extractedFeatures;
 
   @override
   void initState() {
     super.initState();
-    _loadModelAndCsvFromInternal();
+    testLoadModelAsset();
+    _loadAndPredict();
   }
 
-  Future<void> _loadModelAndCsvFromInternal() async {
-    try {
-      _interpreter = await Interpreter.fromAsset(modelPath);
+  Future<void> _loadAndPredict() async {
+  setState(() {
+    _loading = true;
+    _error = null;
+    _predictionResult = null;
+    _extractedFeatures = null;
+  });
 
-      final dir = await getApplicationDocumentsDirectory();
-      final csvFile = File('${dir.path}/$csvFileName');
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${widget.userName}:data';
+    final data = prefs.getString(key);
 
-      if (!await csvFile.exists()) {
-        setState(() => _output = 'CSV file not found at ${csvFile.path}');
-        return;
-      }
+    if (data == null) throw Exception("No saved data found for user: ${widget.userName}");
 
-      final rawCsv = await csvFile.readAsString();
+    final saved = jsonDecode(data);
+    final cleansedCsvPath = saved['CleansedCsvPath'] as String?;
+    if (cleansedCsvPath == null) throw Exception("No cleansed CSV path found in saved data");
 
-      List<List<dynamic>> csvTable = const CsvToListConverter().convert(rawCsv);
-      _csvData = csvTable
-          .map((row) => row.map((e) => (e as num).toDouble()).toList())
-          .toList();
+    final file = File(cleansedCsvPath);
+    if (!(await file.exists())) throw Exception("Cleansed CSV file not found at: $cleansedCsvPath");
 
-      if (_csvData == null || _csvData!.isEmpty) {
-        setState(() => _output = 'CSV file is empty or invalid.');
-        return;
-      }
+    final csvString = await file.readAsString();
+    if (csvString.isEmpty) throw Exception("CSV file is empty");
 
-      final input = _csvData![0];
-      var inputTensor = [input];
-      var outputTensor = List.filled(outputSize, 0.0).reshape([1, outputSize]);
+    // Parse CSV into rows
+    // Parse CSV into rows
+List<List<dynamic>> rows = const CsvToListConverter().convert(csvString);
 
-      _interpreter!.run(inputTensor, outputTensor);
+print('Total rows in CSV: ${rows.length}');
 
-      setState(() {
-        _output = 'Input: $input\nOutput: ${outputTensor[0]}';
-      });
-    } catch (e) {
-      setState(() => _output = 'Error: $e');
+// No header row to skip
+int startRow = 0;
+
+print('Rows after skipping header: ${rows.length - startRow}');
+
+if (rows.length - startRow < 1) {
+  throw Exception("CSV does not contain enough data rows");
+}
+
+// Extract features from the first data row
+List<dynamic> featureRow = rows[startRow];
+
+// Your model expects 20 features (adjust if needed)
+const int expectedFeatureCount = 19;
+
+if (featureRow.length < expectedFeatureCount) {
+  throw Exception("CSV row has only ${featureRow.length} columns, expected $expectedFeatureCount");
+}
+
+List<double> features = [];
+
+for (int i = 0; i < expectedFeatureCount; i++) {
+  final cell = featureRow[i];
+  double? value;
+
+  if (cell is num) {
+    value = cell.toDouble();
+  } else if (cell is String) {
+    value = double.tryParse(cell.trim());
+  }
+
+  if (value == null || !value.isFinite) {
+    throw Exception("Invalid or missing numeric value at feature index $i: $cell");
+  }
+
+  features.add(value);
+}
+
+_extractedFeatures = features;
+print('📈 Extracted features: ${features.take(5).toList()}...');
+
+// Continue with prediction...
+
+
+    if (!MLService().isInitialized) {
+      print('🔄 Initializing ML Service...');
+      await MLService().initialize();
     }
-  }
 
-  @override
-  void dispose() {
-    _interpreter?.close();
-    super.dispose();
-  }
+    print('🧠 Making prediction...');
+    PredictionResult prediction = await MLService().predict(features);
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'TFLite Internal CSV Demo',
-      home: Scaffold(
-        appBar: AppBar(title: const Text('TFLite Internal CSV Demo')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              _output,
-              style: const TextStyle(fontSize: 18),
-              textAlign: TextAlign.center,
+    setState(() {
+      _predictionResult = prediction;
+      _loading = false;
+    });
+
+    print('✅ Prediction completed successfully');
+
+  } catch (e, stackTrace) {
+    print('❌ Error in _loadAndPredict: $e');
+    print('Stack trace: $stackTrace');
+
+    setState(() {
+      _error = e.toString();
+      _loading = false;
+    });
+  }
+}
+
+
+  Widget _buildFeatureInfo() {
+    if (_extractedFeatures == null) return const SizedBox.shrink();
+    
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Extracted Features:',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
-          ),
+            const SizedBox(height: 8),
+            Text(
+              'Count: ${_extractedFeatures!.length}',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Range: ${_extractedFeatures!.reduce((a, b) => a < b ? a : b).toStringAsFixed(2)} to ${_extractedFeatures!.reduce((a, b) => a > b ? a : b).toStringAsFixed(2)}',
+              style: const TextStyle(fontSize: 14),
+            ),
+          ],
         ),
       ),
     );
   }
+
+  Widget _buildPredictionResult() {
+    if (_predictionResult == null) return const SizedBox.shrink();
+    
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Prediction Result',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildResultRow(
+              'Prediction:', 
+              _predictionResult!.predictionText,
+              _predictionResult!.prediction ? Colors.red : Colors.green,
+            ),
+            _buildResultRow(
+              'Probability:', 
+              _predictionResult!.probabilityPercentage,
+            ),
+            _buildResultRow(
+              'Confidence:', 
+              _predictionResult!.confidencePercentage,
+            ),
+            _buildResultRow(
+              'Threshold:', 
+              _predictionResult!.threshold.toString(),
+            ),
+            _buildResultRow(
+              'Timestamp:', 
+              _predictionResult!.timestamp.toLocal().toString(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResultRow(String label, String value, [Color? valueColor]) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 16,
+                color: valueColor,
+                fontWeight: valueColor != null ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('CSV Prediction - ${widget.userName}'),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: _loading
+            ? const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Processing CSV and making prediction...'),
+                  ],
+                ),
+              )
+            : _error != null
+                ? Center(
+                    child: Card(
+                      color: Colors.red.shade50,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.error_outline,
+                              color: Colors.red,
+                              size: 48,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Error',
+                              style: TextStyle(
+                                color: Colors.red,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _error!,
+                              style: TextStyle(color: Colors.red.shade700),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: _loadAndPredict,
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )
+                : SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildFeatureInfo(),
+                        _buildPredictionResult(),
+                        if (_predictionResult == null)
+                          const Center(
+                            child: Text(
+                              'No prediction available.',
+                              style: TextStyle(fontSize: 16),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _loading ? null : _loadAndPredict,
+        tooltip: 'Refresh Prediction',
+        child: const Icon(Icons.refresh),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
 }
-// class _CsvPredictionPageState extends State<CsvPredictionPage> {
-//   PredictionResult? _predictionResult;
-//   bool _loading = false;
-//   String? _error;
-//   List<double>? _extractedFeatures;
-
-//   @override
-//   void initState() {
-//     super.initState();
-//     testLoadModelAsset();
-//     _loadAndPredict();
-//   }
-
-//   Future<void> _loadAndPredict() async {
-//   setState(() {
-//     _loading = true;
-//     _error = null;
-//     _predictionResult = null;
-//     _extractedFeatures = null;
-//   });
-
-//   try {
-//     final prefs = await SharedPreferences.getInstance();
-//     final key = '${widget.userName}:data';
-//     final data = prefs.getString(key);
-
-//     if (data == null) throw Exception("No saved data found for user: ${widget.userName}");
-
-//     final saved = jsonDecode(data);
-//     final cleansedCsvPath = saved['CleansedCsvPath'] as String?;
-//     if (cleansedCsvPath == null) throw Exception("No cleansed CSV path found in saved data");
-
-//     final file = File(cleansedCsvPath);
-//     if (!(await file.exists())) throw Exception("Cleansed CSV file not found at: $cleansedCsvPath");
-
-//     final csvString = await file.readAsString();
-//     if (csvString.isEmpty) throw Exception("CSV file is empty");
-
-//     // Parse CSV into rows
-//     // Parse CSV into rows
-// List<List<dynamic>> rows = const CsvToListConverter().convert(csvString);
-
-// print('Total rows in CSV: ${rows.length}');
-
-// // No header row to skip
-// int startRow = 0;
-
-// print('Rows after skipping header: ${rows.length - startRow}');
-
-// if (rows.length - startRow < 1) {
-//   throw Exception("CSV does not contain enough data rows");
-// }
-
-// // Extract features from the first data row
-// List<dynamic> featureRow = rows[startRow];
-
-// // Your model expects 20 features (adjust if needed)
-// const int expectedFeatureCount = 19;
-
-// if (featureRow.length < expectedFeatureCount) {
-//   throw Exception("CSV row has only ${featureRow.length} columns, expected $expectedFeatureCount");
-// }
-
-// List<double> features = [];
-
-// for (int i = 0; i < expectedFeatureCount; i++) {
-//   final cell = featureRow[i];
-//   double? value;
-
-//   if (cell is num) {
-//     value = cell.toDouble();
-//   } else if (cell is String) {
-//     value = double.tryParse(cell.trim());
-//   }
-
-//   if (value == null || !value.isFinite) {
-//     throw Exception("Invalid or missing numeric value at feature index $i: $cell");
-//   }
-
-//   features.add(value);
-// }
-
-// _extractedFeatures = features;
-// print('📈 Extracted features: ${features.take(5).toList()}...');
-
-// // Continue with prediction...
-
-
-//     if (!MLService().isInitialized) {
-//       print('🔄 Initializing ML Service...');
-//       await MLService().initialize();
-//     }
-
-//     print('🧠 Making prediction...');
-//     PredictionResult prediction = await MLService().predict(features);
-
-//     setState(() {
-//       _predictionResult = prediction;
-//       _loading = false;
-//     });
-
-//     print('✅ Prediction completed successfully');
-
-//   } catch (e, stackTrace) {
-//     print('❌ Error in _loadAndPredict: $e');
-//     print('Stack trace: $stackTrace');
-
-//     setState(() {
-//       _error = e.toString();
-//       _loading = false;
-//     });
-//   }
-// }
-
-
-//   Widget _buildFeatureInfo() {
-//     if (_extractedFeatures == null) return const SizedBox.shrink();
-    
-//     return Card(
-//       margin: const EdgeInsets.only(bottom: 16),
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           crossAxisAlignment: CrossAxisAlignment.start,
-//           children: [
-//             const Text(
-//               'Extracted Features:',
-//               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-//             ),
-//             const SizedBox(height: 8),
-//             Text(
-//               'Count: ${_extractedFeatures!.length}',
-//               style: const TextStyle(fontSize: 14),
-//             ),
-//             const SizedBox(height: 4),
-//             Text(
-//               'Range: ${_extractedFeatures!.reduce((a, b) => a < b ? a : b).toStringAsFixed(2)} to ${_extractedFeatures!.reduce((a, b) => a > b ? a : b).toStringAsFixed(2)}',
-//               style: const TextStyle(fontSize: 14),
-//             ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   Widget _buildPredictionResult() {
-//     if (_predictionResult == null) return const SizedBox.shrink();
-    
-//     return Card(
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           crossAxisAlignment: CrossAxisAlignment.start,
-//           children: [
-//             Text(
-//               'Prediction Result',
-//               style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-//                 fontWeight: FontWeight.bold,
-//               ),
-//             ),
-//             const SizedBox(height: 16),
-//             _buildResultRow(
-//               'Prediction:', 
-//               _predictionResult!.predictionText,
-//               _predictionResult!.prediction ? Colors.red : Colors.green,
-//             ),
-//             _buildResultRow(
-//               'Probability:', 
-//               _predictionResult!.probabilityPercentage,
-//             ),
-//             _buildResultRow(
-//               'Confidence:', 
-//               _predictionResult!.confidencePercentage,
-//             ),
-//             _buildResultRow(
-//               'Threshold:', 
-//               _predictionResult!.threshold.toString(),
-//             ),
-//             _buildResultRow(
-//               'Timestamp:', 
-//               _predictionResult!.timestamp.toLocal().toString(),
-//             ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   Future<void> testLoadModelAsset() async {
-//   try {
-//     ByteData data = await rootBundle.load('assets/models/model.tflite');
-//     print('✅ Model asset loaded, size: ${data.lengthInBytes} bytes');
-//   } catch (e) {
-//     print('❌ Error loading model asset: $e');
-//   }
-// }
-
-//   Widget _buildResultRow(String label, String value, [Color? valueColor]) {
-//     return Padding(
-//       padding: const EdgeInsets.symmetric(vertical: 4),
-//       child: Row(
-//         crossAxisAlignment: CrossAxisAlignment.start,
-//         children: [
-//           SizedBox(
-//             width: 100,
-//             child: Text(
-//               label,
-//               style: const TextStyle(fontWeight: FontWeight.w500),
-//             ),
-//           ),
-//           Expanded(
-//             child: Text(
-//               value,
-//               style: TextStyle(
-//                 fontSize: 16,
-//                 color: valueColor,
-//                 fontWeight: valueColor != null ? FontWeight.bold : FontWeight.normal,
-//               ),
-//             ),
-//           ),
-//         ],
-//       ),
-//     );
-//   }
-
-//   @override
-//   Widget build(BuildContext context) {
-//     return Scaffold(
-//       appBar: AppBar(
-//         title: Text('CSV Prediction - ${widget.userName}'),
-//         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-//       ),
-//       body: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: _loading
-//             ? const Center(
-//                 child: Column(
-//                   mainAxisAlignment: MainAxisAlignment.center,
-//                   children: [
-//                     CircularProgressIndicator(),
-//                     SizedBox(height: 16),
-//                     Text('Processing CSV and making prediction...'),
-//                   ],
-//                 ),
-//               )
-//             : _error != null
-//                 ? Center(
-//                     child: Card(
-//                       color: Colors.red.shade50,
-//                       child: Padding(
-//                         padding: const EdgeInsets.all(16),
-//                         child: Column(
-//                           mainAxisSize: MainAxisSize.min,
-//                           children: [
-//                             Icon(
-//                               Icons.error_outline,
-//                               color: Colors.red,
-//                               size: 48,
-//                             ),
-//                             const SizedBox(height: 16),
-//                             Text(
-//                               'Error',
-//                               style: TextStyle(
-//                                 color: Colors.red,
-//                                 fontSize: 20,
-//                                 fontWeight: FontWeight.bold,
-//                               ),
-//                             ),
-//                             const SizedBox(height: 8),
-//                             Text(
-//                               _error!,
-//                               style: TextStyle(color: Colors.red.shade700),
-//                               textAlign: TextAlign.center,
-//                             ),
-//                             const SizedBox(height: 16),
-//                             ElevatedButton(
-//                               onPressed: _loadAndPredict,
-//                               child: const Text('Retry'),
-//                             ),
-//                           ],
-//                         ),
-//                       ),
-//                     ),
-//                   )
-//                 : SingleChildScrollView(
-//                     child: Column(
-//                       crossAxisAlignment: CrossAxisAlignment.start,
-//                       children: [
-//                         _buildFeatureInfo(),
-//                         _buildPredictionResult(),
-//                         if (_predictionResult == null)
-//                           const Center(
-//                             child: Text(
-//                               'No prediction available.',
-//                               style: TextStyle(fontSize: 16),
-//                             ),
-//                           ),
-//                       ],
-//                     ),
-//                   ),
-//       ),
-//       floatingActionButton: FloatingActionButton(
-//         onPressed: _loading ? null : _loadAndPredict,
-//         tooltip: 'Refresh Prediction',
-//         child: const Icon(Icons.refresh),
-//       ),
-//     );
-//   }
-
-//   @override
-//   void dispose() {
-//     super.dispose();
-//   }
-// }
-
+Future<void> testLoadModelAsset() async {
+  try {
+    ByteData data = await rootBundle.load('assets/model.tflite');
+    print('✅ Model asset loaded, size: ${data.lengthInBytes} bytes');
+  } catch (e) {
+    print('❌ Error loading model asset: $e');
+  }
+}
 
 
 // class SensorPageWrapper extends StatelessWidget {

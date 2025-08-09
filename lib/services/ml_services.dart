@@ -4,8 +4,8 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:fall_risk/models/prediction_result.dart';
 
 class MLService {
-  static const String MODEL_PATH = 'assets/models/model.tflite';
-  static const String METADATA_PATH = 'assets/models/model_metadata.json';
+  static const String MODEL_PATH = 'assets/model.tflite';
+  static const String METADATA_PATH = 'assets/model_metadata.json';
 
   Interpreter? _interpreter;
   Map<String, dynamic>? _metadata;
@@ -30,7 +30,7 @@ class MLService {
 
     // Interpreter.fromAsset uses relative path inside assets declared in pubspec.yaml
     // So pass relative path WITHOUT 'assets/' prefix
-    _interpreter = await Interpreter.fromAsset('models/model.tflite');
+    _interpreter = await Interpreter.fromAsset('assets/model.tflite');
 
 
     print('✅ Model loaded successfully');
