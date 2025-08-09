@@ -3,10 +3,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:csv/csv.dart';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:camera/camera.dart';
@@ -17,8 +20,13 @@ import 'package:path/path.dart' as path;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
-import 'package:flutter_blue_plus/flutter_blue_plus.dart' as ble; // BLE library
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart' as classic; // Classic Bluetooth
+import 'package:flutter_blue_plus/flutter_blue_plus.dart' as ble; 
+import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart' as classic;
+import 'package:fall_risk/models/prediction_result.dart';
+import 'package:fall_risk/services/ml_services.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:fall_risk/services/ml_services.dart';
+
 
 void main() {
   runApp(MaterialApp(
@@ -623,7 +631,7 @@ class VideoPageWrapper extends StatelessWidget {
       onNext: () {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => VideoPage(userName: userName, onNext: () {})),
+          MaterialPageRoute(builder: (_) => CsvPredictionPage(userName: userName)),
         );
       },
     );
@@ -737,11 +745,12 @@ void stopLogging() async {
   await saveCSV();
 }
 
-Future<void> saveCSV() async {
+Future<String> saveCSV() async {
   final dir = await getExternalStorageDirectory();
   final file = File("${dir!.path}/velocity_log.csv");
   await file.writeAsString(dataLines.join('\n'));
   showMessage("Data saved to velocity_log.csv");
+  return file.path;
 }
 
 Future<void> shareCSV() async {
@@ -759,6 +768,15 @@ Future<void> shareCSV() async {
   }
 
   try {
+    // Save the file path to SharedPreferences first
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${widget.userName}:data';
+    final data = prefs.getString(key);
+    final saved = data != null ? jsonDecode(data) : {};
+    saved['VelocityCsvPath'] = file.path;
+    await prefs.setString(key, jsonEncode(saved));
+
+    // Now share the file
     await Share.shareXFiles([XFile(filePath)], text: 'Here is the velocity log CSV file.');
   } catch (e) {
     showError("Failed to share file: $e");
@@ -1694,6 +1712,7 @@ Future<void> shareCSV() async {
       final handSeparationPath = saved['HandSeparationPath'] as String?;
       final trunkSwingPath = saved['TrunkSwingPath'] as String?;
       final heelSeparationPath = saved['HeelSeparationPath'] as String?;
+      final velocityCsvPath = saved['VelocityCsvPath'] as String?;
 
       // Only proceed if all 5 files exist (demographics + 4 gait metrics)
       if ([demographicsPath, armSeparationPath, handSeparationPath, trunkSwingPath, heelSeparationPath].any((p) => p == null || !File(p!).existsSync())) {
@@ -1791,17 +1810,60 @@ Future<void> shareCSV() async {
         }
       }
       final handSeparationMean = handValues.isNotEmpty ? handValues.reduce((a, b) => a + b) / handValues.length : 0.0;
+      double velocityMeanX = 0.0, velocityMeanY = 0.0, velocityMeanZ = 0.0;
+      double velocityStdX = 0.0, velocityStdY = 0.0, velocityStdZ = 0.0;
+
+      if (velocityCsvPath != null && File(velocityCsvPath).existsSync()) {
+        final velocityFile = File(velocityCsvPath);
+        final velocityContent = await velocityFile.readAsString();
+        final velocityLines = velocityContent.split('\n').where((line) => line.trim().isNotEmpty).toList();
+
+        List<double> velX = [];
+        List<double> velY = [];
+        List<double> velZ = [];
+
+        // Assuming CSV has header line; adjust indexes accordingly
+        final hasHeader = velocityLines.isNotEmpty && velocityLines[0].toLowerCase().contains('vel');
+
+        int startIndex = hasHeader ? 1 : 0;
+
+        for (int i = startIndex; i < velocityLines.length; i++) {
+          final parts = velocityLines[i].split(',');
+          if (parts.length >= 3) {
+            final x = double.tryParse(parts[0].trim());
+            final y = double.tryParse(parts[1].trim());
+            final z = double.tryParse(parts[2].trim());
+            if (x != null && y != null && z != null) {
+              velX.add(x);
+              velY.add(y);
+              velZ.add(z);
+            }
+          }
+        }
+
+        if (velX.isNotEmpty) {
+          velocityMeanX = velX.reduce((a, b) => a + b) / velX.length;
+          velocityStdX = _calculateStandardDeviation(velX);
+        }
+        if (velY.isNotEmpty) {
+          velocityMeanY = velY.reduce((a, b) => a + b) / velY.length;
+          velocityStdY = _calculateStandardDeviation(velY);
+        }
+        if (velZ.isNotEmpty) {
+          velocityMeanZ = velZ.reduce((a, b) => a + b) / velZ.length;
+          velocityStdZ = _calculateStandardDeviation(velZ);
+        }
+      }
 
       // Create cleansed data with specified format
       final StringBuffer cleansedCsv = StringBuffer();
-      cleansedCsv.writeln('Part_id,age,sex,height,weight,BMI,Step Width mean,Step Width std,Trunk Swing mean,Trunk Swing std,Arm Separation Left mean,Arm Separation Right mean,Arm Separation Left std,Arm Separation Right std,Hand Separation mean');
-      
+    
       // Convert sex to text format (1 = M, 0 = F)
-      final sexText = demographicsData['Sex_binary'] == '1' ? 'M' : 'F';
-      
-      cleansedCsv.write('${demographicsData['Name']},');
+      final sexBinary = demographicsData['Sex_binary'] == '1' ? '1' : '0'; 
+      // Assuming '1' means male, so male = 1, female = 0
+
       cleansedCsv.write('${demographicsData['Age']},');
-      cleansedCsv.write('$sexText,');
+      cleansedCsv.write('$sexBinary,');
       cleansedCsv.write('${demographicsData['Height_meters']},');
       cleansedCsv.write('${demographicsData['Weight_kg']},');
       cleansedCsv.write('${demographicsData['BMI']},');
@@ -1813,7 +1875,13 @@ Future<void> shareCSV() async {
       cleansedCsv.write('${armRightMean.toStringAsFixed(2)},');
       cleansedCsv.write('${armLeftStd.toStringAsFixed(2)},');
       cleansedCsv.write('${armRightStd.toStringAsFixed(2)},');
-      cleansedCsv.writeln('${handSeparationMean.toStringAsFixed(2)}');
+      cleansedCsv.write('${handSeparationMean.toStringAsFixed(2)},');
+      cleansedCsv.write('${velocityMeanX.toStringAsFixed(2)},');
+      cleansedCsv.write('${velocityStdX.toStringAsFixed(2)},');
+      cleansedCsv.write('${velocityMeanY.toStringAsFixed(2)},');
+      cleansedCsv.write('${velocityStdY.toStringAsFixed(2)},');
+      cleansedCsv.write('${velocityMeanZ.toStringAsFixed(2)},');
+      cleansedCsv.write('${velocityStdZ.toStringAsFixed(2)}');
 
       // Save cleansed data
       final directory = await getApplicationDocumentsDirectory();
@@ -2019,6 +2087,14 @@ Future<void> shareCSV() async {
         fileNames.add(path.basename(cleansedCsvPath));
       }
 
+      final velocityCsvPath = saved['VelocityCsvPath'] as String?;
+      if (velocityCsvPath != null && File(velocityCsvPath).existsSync()) {
+        filesToShare.add(XFile(velocityCsvPath));
+        fileNames.add(path.basename(velocityCsvPath));
+      }
+
+      
+
       if (filesToShare.isNotEmpty) {
         await Share.shareXFiles(
           filesToShare,
@@ -2081,6 +2157,7 @@ Future<void> shareCSV() async {
             ? CircularProgressIndicator()
             : SingleChildScrollView(
                 child: Column(
+                  
                   mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -2136,6 +2213,7 @@ Row(
       child: Text("STOP & SAVE SENSOR"),
       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
     ),
+    
     SizedBox(width: 10),
     ElevatedButton(
       onPressed: isCollecting ? null : shareCSV,
@@ -2224,6 +2302,8 @@ Row(
     );
   }
 }
+
+
 
 double translateX(
     double x, InputImageRotation rotation, Size size, Size absoluteImageSize) {
@@ -2331,6 +2411,413 @@ class PosePainter extends CustomPainter {
         oldDelegate.poses != poses;
   }
 }
+
+class CsvPredictionPage extends StatefulWidget {
+  final String userName;
+  
+  const CsvPredictionPage({Key? key, required this.userName}) : super(key: key);
+
+  @override
+  _CsvPredictionPageState createState() => _CsvPredictionPageState();
+}
+class _CsvPredictionPageState extends State<CsvPredictionPage> {
+Interpreter? _interpreter;
+  List<List<double>>? _csvData;
+  String _output = 'Loading...';
+
+  static const String modelPath = 'model.tflite';
+
+  // Your internal CSV filename
+  static const String csvFileName = 'cleansedCsvPath.csv';
+
+  // Set your model's output tensor size here
+  static const int outputSize = 3;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadModelAndCsvFromInternal();
+  }
+
+  Future<void> _loadModelAndCsvFromInternal() async {
+    try {
+      _interpreter = await Interpreter.fromAsset(modelPath);
+
+      final dir = await getApplicationDocumentsDirectory();
+      final csvFile = File('${dir.path}/$csvFileName');
+
+      if (!await csvFile.exists()) {
+        setState(() => _output = 'CSV file not found at ${csvFile.path}');
+        return;
+      }
+
+      final rawCsv = await csvFile.readAsString();
+
+      List<List<dynamic>> csvTable = const CsvToListConverter().convert(rawCsv);
+      _csvData = csvTable
+          .map((row) => row.map((e) => (e as num).toDouble()).toList())
+          .toList();
+
+      if (_csvData == null || _csvData!.isEmpty) {
+        setState(() => _output = 'CSV file is empty or invalid.');
+        return;
+      }
+
+      final input = _csvData![0];
+      var inputTensor = [input];
+      var outputTensor = List.filled(outputSize, 0.0).reshape([1, outputSize]);
+
+      _interpreter!.run(inputTensor, outputTensor);
+
+      setState(() {
+        _output = 'Input: $input\nOutput: ${outputTensor[0]}';
+      });
+    } catch (e) {
+      setState(() => _output = 'Error: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _interpreter?.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'TFLite Internal CSV Demo',
+      home: Scaffold(
+        appBar: AppBar(title: const Text('TFLite Internal CSV Demo')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _output,
+              style: const TextStyle(fontSize: 18),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+// class _CsvPredictionPageState extends State<CsvPredictionPage> {
+//   PredictionResult? _predictionResult;
+//   bool _loading = false;
+//   String? _error;
+//   List<double>? _extractedFeatures;
+
+//   @override
+//   void initState() {
+//     super.initState();
+//     testLoadModelAsset();
+//     _loadAndPredict();
+//   }
+
+//   Future<void> _loadAndPredict() async {
+//   setState(() {
+//     _loading = true;
+//     _error = null;
+//     _predictionResult = null;
+//     _extractedFeatures = null;
+//   });
+
+//   try {
+//     final prefs = await SharedPreferences.getInstance();
+//     final key = '${widget.userName}:data';
+//     final data = prefs.getString(key);
+
+//     if (data == null) throw Exception("No saved data found for user: ${widget.userName}");
+
+//     final saved = jsonDecode(data);
+//     final cleansedCsvPath = saved['CleansedCsvPath'] as String?;
+//     if (cleansedCsvPath == null) throw Exception("No cleansed CSV path found in saved data");
+
+//     final file = File(cleansedCsvPath);
+//     if (!(await file.exists())) throw Exception("Cleansed CSV file not found at: $cleansedCsvPath");
+
+//     final csvString = await file.readAsString();
+//     if (csvString.isEmpty) throw Exception("CSV file is empty");
+
+//     // Parse CSV into rows
+//     // Parse CSV into rows
+// List<List<dynamic>> rows = const CsvToListConverter().convert(csvString);
+
+// print('Total rows in CSV: ${rows.length}');
+
+// // No header row to skip
+// int startRow = 0;
+
+// print('Rows after skipping header: ${rows.length - startRow}');
+
+// if (rows.length - startRow < 1) {
+//   throw Exception("CSV does not contain enough data rows");
+// }
+
+// // Extract features from the first data row
+// List<dynamic> featureRow = rows[startRow];
+
+// // Your model expects 20 features (adjust if needed)
+// const int expectedFeatureCount = 19;
+
+// if (featureRow.length < expectedFeatureCount) {
+//   throw Exception("CSV row has only ${featureRow.length} columns, expected $expectedFeatureCount");
+// }
+
+// List<double> features = [];
+
+// for (int i = 0; i < expectedFeatureCount; i++) {
+//   final cell = featureRow[i];
+//   double? value;
+
+//   if (cell is num) {
+//     value = cell.toDouble();
+//   } else if (cell is String) {
+//     value = double.tryParse(cell.trim());
+//   }
+
+//   if (value == null || !value.isFinite) {
+//     throw Exception("Invalid or missing numeric value at feature index $i: $cell");
+//   }
+
+//   features.add(value);
+// }
+
+// _extractedFeatures = features;
+// print('📈 Extracted features: ${features.take(5).toList()}...');
+
+// // Continue with prediction...
+
+
+//     if (!MLService().isInitialized) {
+//       print('🔄 Initializing ML Service...');
+//       await MLService().initialize();
+//     }
+
+//     print('🧠 Making prediction...');
+//     PredictionResult prediction = await MLService().predict(features);
+
+//     setState(() {
+//       _predictionResult = prediction;
+//       _loading = false;
+//     });
+
+//     print('✅ Prediction completed successfully');
+
+//   } catch (e, stackTrace) {
+//     print('❌ Error in _loadAndPredict: $e');
+//     print('Stack trace: $stackTrace');
+
+//     setState(() {
+//       _error = e.toString();
+//       _loading = false;
+//     });
+//   }
+// }
+
+
+//   Widget _buildFeatureInfo() {
+//     if (_extractedFeatures == null) return const SizedBox.shrink();
+    
+//     return Card(
+//       margin: const EdgeInsets.only(bottom: 16),
+//       child: Padding(
+//         padding: const EdgeInsets.all(16),
+//         child: Column(
+//           crossAxisAlignment: CrossAxisAlignment.start,
+//           children: [
+//             const Text(
+//               'Extracted Features:',
+//               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+//             ),
+//             const SizedBox(height: 8),
+//             Text(
+//               'Count: ${_extractedFeatures!.length}',
+//               style: const TextStyle(fontSize: 14),
+//             ),
+//             const SizedBox(height: 4),
+//             Text(
+//               'Range: ${_extractedFeatures!.reduce((a, b) => a < b ? a : b).toStringAsFixed(2)} to ${_extractedFeatures!.reduce((a, b) => a > b ? a : b).toStringAsFixed(2)}',
+//               style: const TextStyle(fontSize: 14),
+//             ),
+//           ],
+//         ),
+//       ),
+//     );
+//   }
+
+//   Widget _buildPredictionResult() {
+//     if (_predictionResult == null) return const SizedBox.shrink();
+    
+//     return Card(
+//       child: Padding(
+//         padding: const EdgeInsets.all(16),
+//         child: Column(
+//           crossAxisAlignment: CrossAxisAlignment.start,
+//           children: [
+//             Text(
+//               'Prediction Result',
+//               style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+//                 fontWeight: FontWeight.bold,
+//               ),
+//             ),
+//             const SizedBox(height: 16),
+//             _buildResultRow(
+//               'Prediction:', 
+//               _predictionResult!.predictionText,
+//               _predictionResult!.prediction ? Colors.red : Colors.green,
+//             ),
+//             _buildResultRow(
+//               'Probability:', 
+//               _predictionResult!.probabilityPercentage,
+//             ),
+//             _buildResultRow(
+//               'Confidence:', 
+//               _predictionResult!.confidencePercentage,
+//             ),
+//             _buildResultRow(
+//               'Threshold:', 
+//               _predictionResult!.threshold.toString(),
+//             ),
+//             _buildResultRow(
+//               'Timestamp:', 
+//               _predictionResult!.timestamp.toLocal().toString(),
+//             ),
+//           ],
+//         ),
+//       ),
+//     );
+//   }
+
+//   Future<void> testLoadModelAsset() async {
+//   try {
+//     ByteData data = await rootBundle.load('assets/models/model.tflite');
+//     print('✅ Model asset loaded, size: ${data.lengthInBytes} bytes');
+//   } catch (e) {
+//     print('❌ Error loading model asset: $e');
+//   }
+// }
+
+//   Widget _buildResultRow(String label, String value, [Color? valueColor]) {
+//     return Padding(
+//       padding: const EdgeInsets.symmetric(vertical: 4),
+//       child: Row(
+//         crossAxisAlignment: CrossAxisAlignment.start,
+//         children: [
+//           SizedBox(
+//             width: 100,
+//             child: Text(
+//               label,
+//               style: const TextStyle(fontWeight: FontWeight.w500),
+//             ),
+//           ),
+//           Expanded(
+//             child: Text(
+//               value,
+//               style: TextStyle(
+//                 fontSize: 16,
+//                 color: valueColor,
+//                 fontWeight: valueColor != null ? FontWeight.bold : FontWeight.normal,
+//               ),
+//             ),
+//           ),
+//         ],
+//       ),
+//     );
+//   }
+
+//   @override
+//   Widget build(BuildContext context) {
+//     return Scaffold(
+//       appBar: AppBar(
+//         title: Text('CSV Prediction - ${widget.userName}'),
+//         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+//       ),
+//       body: Padding(
+//         padding: const EdgeInsets.all(16),
+//         child: _loading
+//             ? const Center(
+//                 child: Column(
+//                   mainAxisAlignment: MainAxisAlignment.center,
+//                   children: [
+//                     CircularProgressIndicator(),
+//                     SizedBox(height: 16),
+//                     Text('Processing CSV and making prediction...'),
+//                   ],
+//                 ),
+//               )
+//             : _error != null
+//                 ? Center(
+//                     child: Card(
+//                       color: Colors.red.shade50,
+//                       child: Padding(
+//                         padding: const EdgeInsets.all(16),
+//                         child: Column(
+//                           mainAxisSize: MainAxisSize.min,
+//                           children: [
+//                             Icon(
+//                               Icons.error_outline,
+//                               color: Colors.red,
+//                               size: 48,
+//                             ),
+//                             const SizedBox(height: 16),
+//                             Text(
+//                               'Error',
+//                               style: TextStyle(
+//                                 color: Colors.red,
+//                                 fontSize: 20,
+//                                 fontWeight: FontWeight.bold,
+//                               ),
+//                             ),
+//                             const SizedBox(height: 8),
+//                             Text(
+//                               _error!,
+//                               style: TextStyle(color: Colors.red.shade700),
+//                               textAlign: TextAlign.center,
+//                             ),
+//                             const SizedBox(height: 16),
+//                             ElevatedButton(
+//                               onPressed: _loadAndPredict,
+//                               child: const Text('Retry'),
+//                             ),
+//                           ],
+//                         ),
+//                       ),
+//                     ),
+//                   )
+//                 : SingleChildScrollView(
+//                     child: Column(
+//                       crossAxisAlignment: CrossAxisAlignment.start,
+//                       children: [
+//                         _buildFeatureInfo(),
+//                         _buildPredictionResult(),
+//                         if (_predictionResult == null)
+//                           const Center(
+//                             child: Text(
+//                               'No prediction available.',
+//                               style: TextStyle(fontSize: 16),
+//                             ),
+//                           ),
+//                       ],
+//                     ),
+//                   ),
+//       ),
+//       floatingActionButton: FloatingActionButton(
+//         onPressed: _loading ? null : _loadAndPredict,
+//         tooltip: 'Refresh Prediction',
+//         child: const Icon(Icons.refresh),
+//       ),
+//     );
+//   }
+
+//   @override
+//   void dispose() {
+//     super.dispose();
+//   }
+// }
+
 
 
 // class SensorPageWrapper extends StatelessWidget {
